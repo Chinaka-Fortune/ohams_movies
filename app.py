@@ -37,6 +37,11 @@ jwt = JWTManager(app)
 migrate = Migrate(app, db)
 init_db(app)
 
+@app.route('/api/debug')
+def debug():
+    print("DEBUG: /api/debug endpoint called")
+    return jsonify({'message': 'Blueprint v1 is active'})
+
 @jwt.invalid_token_loader
 def invalid_token_callback(error):
     print(f"DEBUG: JWT invalid token error: {error}")
@@ -52,7 +57,7 @@ def expired_token_callback(jwt_header, jwt_payload):
     print(f"DEBUG: JWT expired token error: {jwt_payload}")
     return jsonify({'message': 'Token expired', 'error': 'Token has expired'}), 401
 
-from api.routes import api_blueprint
+from routes import api_blueprint
 app.register_blueprint(api_blueprint, url_prefix='/api')
 print("DEBUG: Registered api_blueprint with /api prefix")
 
