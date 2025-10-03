@@ -6,8 +6,8 @@ import string
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
-    email = db.Column(db.String(255), unique=True, nullable=False)
-    phone = db.Column(db.String(20), unique=True, nullable=False)
+    email = db.Column(db.String(255), unique=True, nullable=False, index=True)
+    phone = db.Column(db.String(20), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(255), nullable=False)
     is_admin = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, server_default=db.func.current_timestamp())
@@ -24,7 +24,9 @@ class Movie(db.Model):
     title = db.Column(db.String(255), nullable=False)
     premiere_date = db.Column(db.Date, nullable=False)
     flier_image = db.Column(db.LargeBinary, nullable=True)
-    price = db.Column(db.Numeric(10, 2), nullable=False, default=13000.00)
+    price = db.Column(db.Numeric(10, 2), nullable=False)
+    event_time = db.Column(db.String(10), nullable=True, default='6pm')
+    event_location = db.Column(db.String(255), nullable=True, default='Ozone Cinema, Yaba')
 
 class Payment(db.Model):
     __tablename__ = 'payments'
@@ -43,13 +45,16 @@ class Ticket(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
     payment_id = db.Column(db.Integer, db.ForeignKey('payments.id'))
     movie_id = db.Column(db.Integer, db.ForeignKey('movies.id'))
-    token = db.Column(db.String(7), unique=True, nullable=False)
+    token = db.Column(db.String(7), unique=True, nullable=False, index=True)
     ticket_type = db.Column(db.String(10), nullable=False, default='regular')
     created_at = db.Column(db.DateTime, server_default=db.func.current_timestamp())
 
     @staticmethod
     def generate_token():
-        return ''.join(random.choices(string.ascii_uppercase + string.digits, k=7))
+        while True:
+            token = ''.join(random.choices(string.ascii_uppercase + string.digits, k=7))
+            if not Ticket.query.filter_by(token=token).first():
+                return token
 
 class Setting(db.Model):
     __tablename__ = 'settings'
@@ -60,6 +65,8 @@ class Setting(db.Model):
 def init_db(app):
     with app.app_context():
         db.create_all()
+        if not Setting.query.filter_by(key='regular_price').first():
+            db.session.add(Setting(key='regular_price', value='13000.00'))
         if not Setting.query.filter_by(key='vip_price').first():
             db.session.add(Setting(key='vip_price', value='25000.00'))
         if not Setting.query.filter_by(key='vip_limit').first():

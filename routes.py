@@ -11,6 +11,7 @@ from PIL import Image
 import io
 import tempfile
 import secrets
+import re
 
 api_blueprint = Blueprint('api', __name__)
 print("DEBUG: Loading routes.py with blueprint v1")
@@ -30,6 +31,13 @@ def compress_image(image_data, max_size=(300, 300), quality=85):
 def upload_image_to_twilio(image_data, twilio_client):
     """Upload image to Twilio Content API and return media URL."""
     try:
+        if len(image_data) > 5 * 1024 * 1024:  # 5MB limit
+            print("DEBUG: Image exceeds size limit")
+            return None
+        img = Image.open(io.BytesIO(image_data))
+        if img.format.lower() not in ['jpeg', 'png']:
+            print("DEBUG: Unsupported image format")
+            return None
         url = 'https://content.twilio.com/v1/Content'
         headers = {
             'Authorization': f'Basic {base64.b64encode(f"{os.getenv("TWILIO_ACCOUNT_SID")}:{os.getenv("TWILIO_AUTH_TOKEN")}".encode()).decode()}',
@@ -52,6 +60,14 @@ def upload_image_to_twilio(image_data, twilio_client):
     except Exception as e:
         print(f"DEBUG: Error uploading image to Twilio: {str(e)}")
         return None
+
+def is_valid_email(email):
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    return bool(re.match(pattern, email.strip()))
+
+def is_valid_phone(phone):
+    pattern = r'^\+?\d{10,15}$'
+    return bool(re.match(pattern, phone.strip()))
 
 @api_blueprint.route('/register', methods=['POST'])
 def register():
@@ -103,6 +119,48 @@ def get_movies():
     except Exception as e:
         return jsonify({'message': f'Error: {str(e)}'}), 500
 
+@api_blueprint.route('/admin/movies', methods=['GET'])
+@jwt_required()
+def get_admin_movies():
+    print("DEBUG: /api/admin/movies endpoint called")
+    try:
+        user_id = get_jwt_identity()
+        user = User.query.get(int(user_id))
+        if not user.is_admin:
+            return jsonify({'message': 'Admin access required'}), 403
+        movies = Movie.query.all()
+        vip_price = float(Setting.query.filter_by(key='vip_price').first().value)
+        return jsonify([{
+            'id': m.id,
+            'title': m.title,
+            'premiere_date': str(m.premiere_date),
+            'flier_image': base64.b64encode(m.flier_image).decode('utf-8') if m.flier_image else None,
+            'regular_price': str(m.price),
+            'vip_price': str(vip_price)
+        } for m in movies])
+    except Exception as e:
+        print(f"DEBUG: Error in /api/admin/movies GET: {str(e)}")
+        return jsonify({'message': f'Error: {str(e)}'}), 500
+
+@api_blueprint.route('/verify-token', methods=['GET'])
+@jwt_required()
+def verify_token_endpoint():
+    print("DEBUG: /api/verify-token endpoint called")
+    try:
+        user_id = get_jwt_identity()
+        user = User.query.get(int(user_id))
+        return jsonify({
+            'message': 'Token is valid',
+            'user': {
+                'id': user.id,
+                'email': user.email,
+                'is_admin': user.is_admin
+            }
+        }), 200
+    except Exception as e:
+        print(f"DEBUG: Error in /api/verify-token: {str(e)}")
+        return jsonify({'message': f'Error: {str(e)}'}), 401
+
 @api_blueprint.route('/image/<int:movie_id>', methods=['GET'])
 def get_movie_image(movie_id):
     print("DEBUG: /api/image endpoint called")
@@ -128,12 +186,13 @@ def add_movie():
         if not user.is_admin:
             return jsonify({'message': 'Admin access required'}), 403
 
-        if 'title' not in request.form or 'premiere_date' not in request.form or 'flier_image' not in request.files or 'price' not in request.form:
-            return jsonify({'message': 'Missing required fields: title, premiere_date, flier_image, price'}), 400
+        if 'title' not in request.form or 'premiere_date' not in request.form or 'flier_image' not in request.files:
+            return jsonify({'message': 'Missing required fields: title, premiere_date, flier_image'}), 400
 
         title = request.form['title']
         premiere_date_str = request.form['premiere_date']
-        price = float(request.form['price'])
+        price = request.form.get('price', Setting.query.filter_by(key='regular_price').first().value)
+        price = float(price)
 
         try:
             premiere_date = datetime.strptime(premiere_date_str, '%Y-%m-%d').date()
@@ -361,12 +420,17 @@ def initialize_payment():
             return jsonify({'message': 'Movie not found'}), 404
 
         if ticket_type == 'vip':
-            vip_limit = int(Setting.query.filter_by(key='vip_limit').first().value)
-            vip_count = Payment.query.filter_by(movie_id=movie_id, ticket_type='vip', status='success').count()
-            if vip_count >= vip_limit:
-                print(f"DEBUG: VIP limit reached: {vip_count}/{vip_limit}")
-                return jsonify({'message': 'VIP tickets sold out'}), 400
-            amount = float(Setting.query.filter_by(key='vip_price').first().value)
+            vip_setting = Setting.query.filter_by(key='vip_price').first()
+            if not vip_setting:
+                print("DEBUG: vip_price setting not found")
+                return jsonify({'message': 'VIP price not configured'}), 500
+            with db.session.begin():
+                vip_limit = int(Setting.query.filter_by(key='vip_limit').first().value)
+                vip_count = Payment.query.filter_by(movie_id=movie_id, ticket_type='vip', status='success').count()
+                if vip_count >= vip_limit:
+                    print(f"DEBUG: VIP limit reached: {vip_count}/{vip_limit}")
+                    return jsonify({'message': 'VIP tickets sold out'}), 400
+                amount = float(vip_setting.value)
         else:
             amount = float(movie.price)
 
@@ -479,10 +543,8 @@ def verify_payment(reference):
             
             event_title = movie.title
             event_date = str(movie.premiere_date)
-            event_time = "6pm"
-            event_location = "Ozone Cinema, Yaba"
-            if movie.title.lower() == "bad dad, bad husband":
-                event_date = "2025-11-22"
+            event_time = movie.event_time
+            event_location = movie.event_location
             
             ticket_type_label = 'VIP' if payment.ticket_type == 'vip' else 'Regular'
             flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
@@ -508,7 +570,7 @@ Best regards,
 <br><img src="{flier_data_uri}" alt="Movie Flier" style="max-width: 100%; height: auto;">
 """
             message = Mail(
-                from_email='fortchimez@gmail.com',
+                from_email=current_app.config['FROM_EMAIL'],
                 to_emails=user.email,
                 subject=f'{ticket_type_label} Ticket for {event_title}',
                 html_content=email_message
@@ -584,6 +646,12 @@ def send_event_email():
         phone_list = [phone.strip() for phone in data['phone'].split(',')]
         if len(email_list) != len(phone_list):
             return jsonify({'message': 'Number of emails and phone numbers must match'}), 400
+        for email in email_list:
+            if not is_valid_email(email):
+                return jsonify({'message': f'Invalid email format: {email}'}), 400
+        for phone in phone_list:
+            if not is_valid_phone(phone):
+                return jsonify({'message': f'Invalid phone format: {phone}'}), 400
         
         ticket_tokens = []
         
@@ -611,7 +679,7 @@ def send_event_email():
             flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
             
             message = Mail(
-                from_email='fortchimez@gmail.com',
+                from_email=current_app.config['FROM_EMAIL'],
                 to_emails=To(email),
                 subject=f'VIP Event: {movie.title}',
                 html_content=f'Your VIP ticket token: {ticket_token}<br>Movie: {movie.title}<br>Date: {movie.premiere_date}<br><img src="{flier_data_uri}" alt="Movie Flier" style="max-width: 100%; height: auto;">'
@@ -653,6 +721,10 @@ def send_whatsapp():
             return jsonify({'message': 'Movie not found'}), 404
         
         phone_list = [phone.strip() for phone in data['phone'].split(',')]
+        for phone in phone_list:
+            if not is_valid_phone(phone):
+                return jsonify({'message': f'Invalid phone format: {phone}'}), 400
+        
         errors = []
         ticket_tokens = []
         
@@ -733,6 +805,12 @@ def send_vip_ticket():
         
         recipient = data['recipient'].strip()
         phone = data['phone'].strip()
+        if data['method'] == 'email':
+            if not is_valid_email(recipient):
+                return jsonify({'message': f'Invalid email format: {recipient}'}), 400
+        if not is_valid_phone(phone):
+            return jsonify({'message': f'Invalid phone format: {phone}'}), 400
+        
         target_user = None
         if data['method'] == 'email':
             target_user = User.query.filter_by(email=recipient).first()
@@ -756,27 +834,28 @@ def send_vip_ticket():
                 db.session.commit()
                 print(f"DEBUG: New user created with phone: {phone}, email: {random_email}")
         
-        vip_limit = int(Setting.query.filter_by(key='vip_limit').first().value)
-        vip_count = Ticket.query.filter_by(movie_id=data['movie_id'], ticket_type='vip').count()
-        if vip_count >= vip_limit:
-            print(f"DEBUG: VIP limit reached: {vip_count}/{vip_limit}")
-            return jsonify({'message': 'VIP tickets sold out'}), 400
+        with db.session.begin():
+            vip_limit = int(Setting.query.filter_by(key='vip_limit').first().value)
+            vip_count = Ticket.query.filter_by(movie_id=data['movie_id'], ticket_type='vip').count()
+            if vip_count >= vip_limit:
+                print(f"DEBUG: VIP limit reached: {vip_count}/{vip_limit}")
+                return jsonify({'message': 'VIP tickets sold out'}), 400
 
-        ticket_token = Ticket.generate_token()
-        ticket = Ticket(
-            user_id=target_user.id,
-            movie_id=data['movie_id'],
-            token=ticket_token,
-            ticket_type='vip'
-        )
-        db.session.add(ticket)
-        db.session.commit()
+            ticket_token = Ticket.generate_token()
+            ticket = Ticket(
+                user_id=target_user.id,
+                movie_id=data['movie_id'],
+                token=ticket_token,
+                ticket_type='vip'
+            )
+            db.session.add(ticket)
+            db.session.commit()
         
         flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
         
         if data['method'] == 'email':
             message = Mail(
-                from_email='fortchimez@gmail.com',
+                from_email=current_app.config['FROM_EMAIL'],
                 to_emails=To(recipient),
                 subject=f'VIP Ticket for {movie.title}',
                 html_content=f'Your VIP ticket token: {ticket_token}<br>Movie: {movie.title}<br>Date: {movie.premiere_date}<br><img src="{flier_data_uri}" alt="Movie Flier" style="max-width: 100%; height: auto;">'
@@ -845,6 +924,14 @@ def send_reminder():
         if len(recipient_list) != len(phone_list):
             return jsonify({'message': 'Number of recipients and phone numbers must match'}), 400
         
+        if data['method'] == 'email':
+            for recipient in recipient_list:
+                if not is_valid_email(recipient):
+                    return jsonify({'message': f'Invalid email format: {recipient}'}), 400
+        for phone in phone_list:
+            if not is_valid_phone(phone):
+                return jsonify({'message': f'Invalid phone format: {phone}'}), 400
+        
         errors = []
         
         flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
@@ -853,7 +940,7 @@ def send_reminder():
             for recipient, phone in zip(recipient_list, phone_list):
                 try:
                     message = Mail(
-                        from_email='fortchimez@gmail.com',
+                        from_email=current_app.config['FROM_EMAIL'],
                         to_emails=To(recipient),
                         subject=f'Reminder: {movie.title}',
                         html_content=f'{data["message"]}<br>Movie: {movie.title}<br>Date: {movie.premiere_date}<br><img src="{flier_data_uri}" alt="Movie Flier" style="max-width: 100%; height: auto;">'
