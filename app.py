@@ -18,8 +18,9 @@ app = Flask(__name__)
 CORS(app, resources={r"/api/*": {
     "origins": [
         "http://localhost:3000",
-        "https://movie-frontend-3173.onrender.com",  # Your frontend URL
-        "https://*.onrender.com"
+        "https://movie-frontend-3173.onrender.com",
+        "https://*.onrender.com",
+        "https://ohamsmovies.com.ng"
     ],
     "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     "allow_headers": ["Content-Type", "Authorization"],
