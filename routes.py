@@ -854,22 +854,21 @@ def send_vip_ticket():
                 db.session.commit()
                 print(f"DEBUG: New user created with phone: {phone}, email: {random_email}")
         
-        with db.session.begin():
-            vip_limit = int(Setting.query.filter_by(key='vip_limit').first().value)
-            vip_count = Ticket.query.filter_by(movie_id=data['movie_id'], ticket_type='vip').count()
-            if vip_count >= vip_limit:
-                print(f"DEBUG: VIP limit reached: {vip_count}/{vip_limit}")
-                return jsonify({'message': 'VIP tickets sold out'}), 400
+        vip_limit = int(Setting.query.filter_by(key='vip_limit').first().value)
+        vip_count = Ticket.query.filter_by(movie_id=data['movie_id'], ticket_type='vip').count()
+        if vip_count >= vip_limit:
+            print(f"DEBUG: VIP limit reached: {vip_count}/{vip_limit}")
+            return jsonify({'message': 'VIP tickets sold out'}), 400
 
-            ticket_token = Ticket.generate_token()
-            ticket = Ticket(
-                user_id=target_user.id,
-                movie_id=data['movie_id'],
-                token=ticket_token,
-                ticket_type='vip'
-            )
-            db.session.add(ticket)
-            db.session.commit()
+        ticket_token = Ticket.generate_token()
+        ticket = Ticket(
+            user_id=target_user.id,
+            movie_id=data['movie_id'],
+            token=ticket_token,
+            ticket_type='vip'
+        )
+        db.session.add(ticket)
+        db.session.commit()
         
         flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
         
