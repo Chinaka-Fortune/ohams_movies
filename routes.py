@@ -12,9 +12,14 @@ import io
 import tempfile
 import secrets
 import re
+import socket
+import dns.resolver
 
 api_blueprint = Blueprint('api', __name__)
 print("DEBUG: Loading routes.py with blueprint v1")
+
+resolver = dns.resolver.Resolver()
+resolver.nameservers = ['8.8.8.8', '8.8.4.4']
 
 def compress_image(image_data, max_size=(300, 300), quality=85):
     """Compress image to JPEG with specified max size and quality."""
@@ -424,13 +429,12 @@ def initialize_payment():
             if not vip_setting:
                 print("DEBUG: vip_price setting not found")
                 return jsonify({'message': 'VIP price not configured'}), 500
-            with db.session.begin():
-                vip_limit = int(Setting.query.filter_by(key='vip_limit').first().value)
-                vip_count = Payment.query.filter_by(movie_id=movie_id, ticket_type='vip', status='success').count()
-                if vip_count >= vip_limit:
-                    print(f"DEBUG: VIP limit reached: {vip_count}/{vip_limit}")
-                    return jsonify({'message': 'VIP tickets sold out'}), 400
-                amount = float(vip_setting.value)
+            vip_limit = int(Setting.query.filter_by(key='vip_limit').first().value)
+            vip_count = Payment.query.filter_by(movie_id=movie_id, ticket_type='vip', status='success').count()
+            if vip_count >= vip_limit:
+                print(f"DEBUG: VIP limit reached: {vip_count}/{vip_limit}")
+                return jsonify({'message': 'VIP tickets sold out'}), 400
+            amount = float(vip_setting.value)
         else:
             amount = float(movie.price)
 
@@ -438,7 +442,7 @@ def initialize_payment():
             'Authorization': f'Bearer {os.getenv("PAYSTACK_SECRET_KEY")}',
             'Content-Type': 'application/json'
         }
-        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+        frontend_url = os.getenv("FRONTEND_URL", "https://ohamsmovies.com.ng")
         callback_url = f"{frontend_url}/payment-status"
         payload = {
             'amount': int(amount * 100),
@@ -447,16 +451,32 @@ def initialize_payment():
             'metadata': {'movie_id': movie_id, 'user_id': user.id, 'ticket_type': ticket_type}
         }
         print(f"DEBUG: Paystack payload: {payload}")
-        response = requests.post(
-            f'{os.getenv("PAYSTACK_BASE_URL", "https://api.paystack.co")}/transaction/initialize',
-            json=payload,
-            headers=headers
-        )
-        response_data = response.json()
-        print(f"DEBUG: Paystack response: {response_data}")
-        if response.status_code != 200:
-            print(f"DEBUG: Paystack error: {response_data}")
-            return jsonify({'message': 'Payment initialization failed', 'error': response_data}), 400
+        
+        # Test DNS resolution
+        try:
+            resolved_ip = resolver.resolve('api.paystack.co', 'A')
+            print(f"DEBUG: Resolved api.paystack.co to {resolved_ip[0].to_text()}")
+        except Exception as dns_error:
+            print(f"DEBUG: DNS resolution failed: {str(dns_error)}")
+            return jsonify({'message': f'Error: DNS resolution failed for Paystack API: {str(dns_error)}'}), 500
+
+        # Make Paystack API call with retry logic
+        try:
+            response = requests.post(
+                f'{os.getenv("PAYSTACK_BASE_URL", "https://api.paystack.co")}/transaction/initialize',
+                json=payload,
+                headers=headers,
+                timeout=10
+            )
+            response_data = response.json()
+            print(f"DEBUG: Paystack response: {response_data}")
+            if response.status_code != 200:
+                print(f"DEBUG: Paystack error: {response_data}")
+                return jsonify({'message': 'Payment initialization failed', 'error': response_data}), 400
+        except requests.exceptions.RequestException as e:
+            print(f"DEBUG: Network error calling Paystack API: {str(e)}")
+            return jsonify({'message': f'Error: Network issue contacting Paystack: {str(e)}'}), 500
+
         payment = Payment(
             user_id=user.id,
             movie_id=movie_id,
