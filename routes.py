@@ -66,7 +66,7 @@ def upload_image_to_twilio(image_data, twilio_client):
         return None
 
 def is_valid_email(email):
-    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    pattern = r'^[a-zA-Z0.9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     return bool(re.match(pattern, email.strip()))
 
 def is_valid_phone(phone):
@@ -777,6 +777,7 @@ def verify_payment(reference):
             print(f"DEBUG: Network error verifying payment: {str(e)}")
             return jsonify({'message': f'Error verifying payment: {str(e)}'}), 500
 
+        ticket_token = None
         if payment.status != 'success':
             payment.status = 'success'
             ticket_token = Ticket.generate_token()
@@ -867,8 +868,20 @@ Thank you for your support!
                     print(f"DEBUG: Twilio is disabled or no phone number for user {user.email}, skipping WhatsApp message")
             except Exception as e:
                 print(f"DEBUG: Twilio error for {user.phone}: {str(e)}")
-        
-        return jsonify({'message': 'Payment verified', 'ticket_token': ticket_token, 'ticket_type': payment.ticket_type}), 200
+        else:
+            # If payment is already 'success', fetch existing ticket
+            ticket = Ticket.query.filter_by(payment_id=payment.id).first()
+            if ticket:
+                ticket_token = ticket.token
+            else:
+                print(f"DEBUG: No ticket found for successful payment {reference}")
+                return jsonify({'message': 'No ticket found for payment'}), 404
+
+        return jsonify({
+            'message': 'Payment verified',
+            'ticket_token': ticket_token,
+            'ticket_type': payment.ticket_type
+        }), 200
     except Exception as e:
         db.session.rollback()
         print(f"DEBUG: Error in /api/payments/verify/{reference}: {str(e)}")
@@ -1276,6 +1289,8 @@ def update_settings():
         data = request.json
         vip_price = data.get('vip_price')
         vip_limit = data.get('vip_limit')
+        if vip_price is None and vip_limit is None:
+            return jsonify({'message': 'At least one setting (vip_price or vip_limit) required'}), 400
         if vip_price is None and vip_limit is None:
             return jsonify({'message': 'At least one setting (vip_price or vip_limit) required'}), 400
         if vip_price is not None:
