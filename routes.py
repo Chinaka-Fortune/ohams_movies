@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify, current_app, send_file
+from flask import Blueprint, request, redirect, jsonify, current_app, send_file
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, get_jwt
 from extensions import db
 from models import User, Payment, Ticket, Movie, Setting
@@ -441,8 +441,8 @@ def initialize_payment():
             'Authorization': f'Bearer {os.getenv("PAYSTACK_SECRET_KEY")}',
             'Content-Type': 'application/json'
         }
-        frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')  # Use FRONTEND_URL
-        callback_url = f"{frontend_url}/payment-callback"  # Redirect to frontend
+        frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000') 
+        callback_url = f"{frontend_url}/payment-callback"
         webhook_url = f"{os.getenv('BACKEND_URL', request.host_url.rstrip('/'))}/api/payment-webhook"
         payload = {
             'amount': int(amount * 100),
@@ -617,14 +617,9 @@ Thank you for your support!
                 print(f"DEBUG: Twilio error for {user.phone}: {str(e)}")
 
         frontend_url = os.getenv("FRONTEND_URL", "https://ohamsmovies.com.ng")
-        redirect_url = f"{frontend_url}/payment-status?reference={reference}"
+        redirect_url = f"{frontend_url}/payment-callback?reference={reference}" 
         print(f"DEBUG: Payment callback processed, redirecting to: {redirect_url}")
-        return jsonify({
-            'message': 'Payment callback processed',
-            'redirect': redirect_url,
-            'ticket_token': ticket_token,
-            'ticket_type': payment.ticket_type
-        }), 200
+        return redirect(redirect_url)
     except Exception as e:
         db.session.rollback()
         print(f"DEBUG: Error in /api/payment-callback: {str(e)}")
