@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify, current_app, send_file, url_for
+from flask import Blueprint, request, jsonify, current_app, send_file
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity, get_jwt
 from extensions import db
 from models import User, Payment, Ticket, Movie, Setting
@@ -12,7 +12,6 @@ import io
 import tempfile
 import secrets
 import re
-import socket
 import dns.resolver
 
 api_blueprint = Blueprint('api', __name__)
@@ -21,7 +20,7 @@ print("DEBUG: Loading routes.py with blueprint v1")
 resolver = dns.resolver.Resolver()
 resolver.nameservers = ['8.8.8.8', '8.8.4.4']
 
-def compress_image(image_data, max_size=(300, 300), quality=85):
+def compress_image(image_data, max_size=(300, 300), quality=95):
     """Compress image to JPEG with specified max size and quality."""
     try:
         img = Image.open(io.BytesIO(image_data))
@@ -53,7 +52,7 @@ def upload_image_to_twilio(image_data, twilio_client):
             'FriendlyName': 'Movie Flier',
             'Content': base64.b64encode(image_data).decode('utf-8')
         }
-        response = requests.post(url, json=payload, headers=headers)
+        response = requests.post(url, json=payload, headers=headers, timeout=10)
         response_data = response.json()
         if response.status_code == 201:
             content_sid = response_data['sid']
@@ -442,17 +441,17 @@ def initialize_payment():
             'Authorization': f'Bearer {os.getenv("PAYSTACK_SECRET_KEY")}',
             'Content-Type': 'application/json'
         }
-        frontend_url = os.getenv("FRONTEND_URL", "https://ohamsmovies.com.ng")
-        callback_url = f"{frontend_url}/payment-status"
+        frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')  # Use FRONTEND_URL
+        callback_url = f"{frontend_url}/payment-callback"  # Redirect to frontend
+        webhook_url = f"{os.getenv('BACKEND_URL', request.host_url.rstrip('/'))}/api/payment-webhook"
         payload = {
             'amount': int(amount * 100),
             'email': email,
             'callback_url': callback_url,
-            'metadata': {'movie_id': movie_id, 'user_id': user.id, 'ticket_type': ticket_type}
+            'metadata': {'movie_id': movie_id, 'user_id': user.id, 'ticket_type': ticket_type, 'webhook_url': webhook_url}
         }
         print(f"DEBUG: Paystack payload: {payload}")
         
-        # Test DNS resolution
         try:
             resolved_ip = resolver.resolve('api.paystack.co', 'A')
             print(f"DEBUG: Resolved api.paystack.co to {resolved_ip[0].to_text()}")
@@ -460,13 +459,12 @@ def initialize_payment():
             print(f"DEBUG: DNS resolution failed: {str(dns_error)}")
             return jsonify({'message': f'Error: DNS resolution failed for Paystack API: {str(dns_error)}'}), 500
 
-        # Make Paystack API call with retry logic
         try:
             response = requests.post(
                 f'{os.getenv("PAYSTACK_BASE_URL", "https://api.paystack.co")}/transaction/initialize',
                 json=payload,
                 headers=headers,
-                timeout=10
+                timeout=15
             )
             response_data = response.json()
             print(f"DEBUG: Paystack response: {response_data}")
@@ -487,6 +485,7 @@ def initialize_payment():
         )
         db.session.add(payment)
         db.session.commit()
+        print(f"DEBUG: Payment created with reference: {response_data['data']['reference']}")
         return jsonify({
             'authorization_url': response_data['data']['authorization_url'],
             'reference': response_data['data']['reference']
@@ -500,51 +499,31 @@ def initialize_payment():
 def payment_callback():
     print("DEBUG: /api/payment-callback endpoint called")
     try:
-        reference = request.args.get('reference')
+        reference = request.args.get('reference') or request.args.get('trxref')
         if not reference:
             print("DEBUG: No reference provided in callback")
             return jsonify({'message': 'Missing reference'}), 400
         
-        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
-        redirect_url = f"{frontend_url}/payment-status?reference={reference}"
-        return jsonify({
-            'message': 'Payment callback received',
-            'redirect': redirect_url
-        }), 200
-    except Exception as e:
-        print(f"DEBUG: Error in /api/payment-callback: {str(e)}")
-        return jsonify({'message': f'Error: {str(e)}'}), 500
-
-@api_blueprint.route('/payments/verify/<reference>', methods=['GET'])
-def verify_payment(reference):
-    print(f"DEBUG: /api/payments/verify/{reference} endpoint called")
-    try:
-        user_id = None
-        try:
-            jwt = get_jwt()
-            user_id = get_jwt_identity()
-            print(f"DEBUG: JWT provided, user_id: {user_id}")
-        except:
-            print("DEBUG: No valid JWT provided, proceeding without authentication")
-
         payment = Payment.query.filter_by(paystack_ref=reference).first()
         if not payment:
             print(f"DEBUG: Payment not found for reference: {reference}")
             return jsonify({'message': 'Payment not found'}), 404
-        if user_id and payment.user_id != int(user_id):
-            print(f"DEBUG: User ID mismatch: payment.user_id={payment.user_id}, jwt.user_id={user_id}")
-            return jsonify({'message': 'Unauthorized access to payment'}), 403
 
         headers = {'Authorization': f'Bearer {os.getenv("PAYSTACK_SECRET_KEY")}'}
-        response = requests.get(
-            f'{os.getenv("PAYSTACK_BASE_URL", "https://api.paystack.co")}/transaction/verify/{reference}',
-            headers=headers
-        )
-        response_data = response.json()
-        print(f"DEBUG: Paystack verify response: {response_data}")
-        if response.status_code != 200 or response_data['data']['status'] != 'success':
-            print(f"DEBUG: Payment verification failed: {response_data}")
-            return jsonify({'message': 'Payment verification failed', 'error': response_data}), 400
+        try:
+            response = requests.get(
+                f'{os.getenv("PAYSTACK_BASE_URL", "https://api.paystack.co")}/transaction/verify/{reference}',
+                headers=headers,
+                timeout=15
+            )
+            response_data = response.json()
+            print(f"DEBUG: Paystack verify response: {response_data}")
+            if response.status_code != 200 or response_data['data']['status'] != 'success':
+                print(f"DEBUG: Payment verification failed: {response_data}")
+                return jsonify({'message': 'Payment verification failed', 'error': response_data}), 400
+        except requests.exceptions.RequestException as e:
+            print(f"DEBUG: Network error verifying payment: {str(e)}")
+            return jsonify({'message': f'Error verifying payment: {str(e)}'}), 500
 
         if payment.status != 'success':
             payment.status = 'success'
@@ -558,13 +537,15 @@ def verify_payment(reference):
             )
             db.session.add(ticket)
             db.session.commit()
+            print(f"DEBUG: Ticket created for payment {reference}, token: {ticket_token}")
+
             movie = Movie.query.get(payment.movie_id)
             user = User.query.get(payment.user_id)
             
             event_title = movie.title
             event_date = str(movie.premiere_date)
-            event_time = movie.event_time
-            event_location = movie.event_location
+            event_time = movie.event_time or 'TBD'
+            event_location = movie.event_location or 'TBD'
             
             ticket_type_label = 'VIP' if payment.ticket_type == 'vip' else 'Regular'
             flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
@@ -572,7 +553,7 @@ def verify_payment(reference):
             email_message = f"""
 Dear {user.email},
 
-Thank you for purchasing a {ticket_type_label} ticket to the highly anticipated premiere of "{event_title}". We're thrilled to have you join us for this exclusive event.
+Thank you for purchasing a {ticket_type_label} ticket to the premiere of "{event_title}".
 
 Your access code is: {ticket_token}
 
@@ -580,30 +561,26 @@ Your access code is: {ticket_token}
 - Time: {event_time}
 - Location: {event_location}
 
-Join us for an evening of drama, suspense, and intrigue as we unveil the cinematic masterpiece that explores the complexities of family dynamics. Meet the cast, get exclusive behind-the-scenes insights, and be among the first to experience the film.
+Join us for an evening of drama, suspense, and intrigue. Arrive 30 minutes early for smooth entry. Complimentary refreshments and photo opportunities with the cast will be available.
 
-Please arrive 30 minutes prior to the screening time to allow for smooth entry and seating. Complimentary refreshments will be provided. Photo opportunities with the cast will be available during the red carpet.
-
-Thank you again for your support! We're honored to share this cinematic journey with you.
-
-Best regards,
+Thank you for your support!
 <br><img src="{flier_data_uri}" alt="Movie Flier" style="max-width: 100%; height: auto;">
 """
-            message = Mail(
-                from_email=current_app.config['FROM_EMAIL'],
-                to_emails=user.email,
-                subject=f'{ticket_type_label} Ticket for {event_title}',
-                html_content=email_message
-            )
             try:
                 sendgrid_client = current_app.config['SENDGRID_CLIENT']
                 if sendgrid_client:
-                    sendgrid_client.send(message)
-                    print(f"DEBUG: {ticket_type_label} Email sent to {user.email} via SendGrid")
+                    message = Mail(
+                        from_email=current_app.config['FROM_EMAIL'],
+                        to_emails=user.email,
+                        subject=f'{ticket_type_label} Ticket for {event_title}',
+                        html_content=email_message
+                    )
+                    response = sendgrid_client.send(message)
+                    print(f"DEBUG: {ticket_type_label} Email sent to {user.email}, status: {response.status_code}")
                 else:
                     print("DEBUG: SendGrid is disabled, skipping email")
             except Exception as e:
-                print(f"DEBUG: SendGrid error: {str(e)}")
+                print(f"DEBUG: SendGrid error for {user.email}: {str(e)}")
             
             try:
                 twilio_client = current_app.config['TWILIO_CLIENT']
@@ -627,19 +604,276 @@ Thank you for your support!
                     if movie.flier_image:
                         media_url = [upload_image_to_twilio(movie.flier_image, twilio_client)]
                         media_url = [url for url in media_url if url]
-                    twilio_client.messages.create(
+                    response = twilio_client.messages.create(
                         from_=current_app.config['TWILIO_WHATSAPP_FROM'],
                         body=whatsapp_message,
                         media_url=media_url,
                         to=f"whatsapp:{user.phone}"
                     )
-                    print(f"DEBUG: {ticket_type_label} WhatsApp message sent to {user.phone}")
+                    print(f"DEBUG: {ticket_type_label} WhatsApp message sent to {user.phone}, SID: {response.sid}")
                 else:
-                    print("DEBUG: Twilio is disabled or no phone number, skipping WhatsApp message")
+                    print(f"DEBUG: Twilio is disabled or no phone number for user {user.email}, skipping WhatsApp message")
             except Exception as e:
-                print(f"DEBUG: Twilio error: {str(e)}")
+                print(f"DEBUG: Twilio error for {user.phone}: {str(e)}")
+
+        frontend_url = os.getenv("FRONTEND_URL", "https://ohamsmovies.com.ng")
+        redirect_url = f"{frontend_url}/payment-status?reference={reference}"
+        print(f"DEBUG: Payment callback processed, redirecting to: {redirect_url}")
+        return jsonify({
+            'message': 'Payment callback processed',
+            'redirect': redirect_url,
+            'ticket_token': ticket_token,
+            'ticket_type': payment.ticket_type
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"DEBUG: Error in /api/payment-callback: {str(e)}")
+        return jsonify({'message': f'Error: {str(e)}'}), 500
+
+@api_blueprint.route('/payment-webhook', methods=['POST'])
+def payment_webhook():
+    print("DEBUG: /api/payment-webhook endpoint called")
+    try:
+        event = request.json
+        print(f"DEBUG: Webhook event: {event}")
+        if not event or 'event' not in event or 'data' not in event:
+            print("DEBUG: Invalid webhook payload")
+            return jsonify({'message': 'Invalid payload'}), 400
+
+        if event['event'] == 'charge.success':
+            reference = event['data']['reference']
+            payment = Payment.query.filter_by(paystack_ref=reference).first()
+            if not payment:
+                print(f"DEBUG: Payment not found for reference: {reference}")
+                return jsonify({'message': 'Payment not found'}), 404
+
+            if payment.status != 'success':
+                payment.status = 'success'
+                ticket_token = Ticket.generate_token()
+                ticket = Ticket(
+                    user_id=payment.user_id,
+                    movie_id=payment.movie_id,
+                    payment_id=payment.id,
+                    token=ticket_token,
+                    ticket_type=payment.ticket_type
+                )
+                db.session.add(ticket)
+                db.session.commit()
+                print(f"DEBUG: Ticket created for payment {reference}, token: {ticket_token}")
+
+                movie = Movie.query.get(payment.movie_id)
+                user = User.query.get(payment.user_id)
+                
+                event_title = movie.title
+                event_date = str(movie.premiere_date)
+                event_time = movie.event_time or 'TBD'
+                event_location = movie.event_location or 'TBD'
+                
+                ticket_type_label = 'VIP' if payment.ticket_type == 'vip' else 'Regular'
+                flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
+                
+                email_message = f"""
+Dear {user.email},
+
+Thank you for purchasing a {ticket_type_label} ticket to the premiere of "{event_title}".
+
+Your access code is: {ticket_token}
+
+- Date: {event_date}
+- Time: {event_time}
+- Location: {event_location}
+
+Join us for an evening of drama, suspense, and intrigue. Arrive 30 minutes early for smooth entry. Complimentary refreshments and photo opportunities with the cast will be available.
+
+Thank you for your support!
+<br><img src="{flier_data_uri}" alt="Movie Flier" style="max-width: 100%; height: auto;">
+"""
+                try:
+                    sendgrid_client = current_app.config['SENDGRID_CLIENT']
+                    if sendgrid_client:
+                        message = Mail(
+                            from_email=current_app.config['FROM_EMAIL'],
+                            to_emails=user.email,
+                            subject=f'{ticket_type_label} Ticket for {event_title}',
+                            html_content=email_message
+                        )
+                        response = sendgrid_client.send(message)
+                        print(f"DEBUG: {ticket_type_label} Email sent to {user.email}, status: {response.status_code}")
+                    else:
+                        print("DEBUG: SendGrid is disabled, skipping email")
+                except Exception as e:
+                    print(f"DEBUG: SendGrid error for {user.email}: {str(e)}")
+                
+                try:
+                    twilio_client = current_app.config['TWILIO_CLIENT']
+                    if twilio_client and user.phone:
+                        whatsapp_message = f"""
+Dear {user.email},
+
+Thank you for purchasing a {ticket_type_label} ticket to the premiere of "{event_title}".
+
+Your access code: {ticket_token}
+
+- Date: {event_date}
+- Time: {event_time}
+- Location: {event_location}
+
+Join us for an evening of drama and intrigue. Arrive 30 minutes early for smooth entry. Complimentary refreshments and photo opportunities with the cast will be available.
+
+Thank you for your support!
+"""
+                        media_url = []
+                        if movie.flier_image:
+                            media_url = [upload_image_to_twilio(movie.flier_image, twilio_client)]
+                            media_url = [url for url in media_url if url]
+                        response = twilio_client.messages.create(
+                            from_=current_app.config['TWILIO_WHATSAPP_FROM'],
+                            body=whatsapp_message,
+                            media_url=media_url,
+                            to=f"whatsapp:{user.phone}"
+                        )
+                        print(f"DEBUG: {ticket_type_label} WhatsApp message sent to {user.phone}, SID: {response.sid}")
+                    else:
+                        print(f"DEBUG: Twilio is disabled or no phone number for user {user.email}, skipping WhatsApp message")
+                except Exception as e:
+                    print(f"DEBUG: Twilio error for {user.phone}: {str(e)}")
+            
+            return jsonify({'message': 'Webhook processed'}), 200
+        else:
+            print(f"DEBUG: Unhandled webhook event: {event['event']}")
+            return jsonify({'message': 'Event not handled'}), 200
+    except Exception as e:
+        print(f"DEBUG: Error in /api/payment-webhook: {str(e)}")
+        return jsonify({'message': f'Error: {str(e)}'}), 500
+
+@api_blueprint.route('/payments/verify/<reference>', methods=['GET'])
+def verify_payment(reference):
+    print(f"DEBUG: /api/payments/verify/{reference} endpoint called")
+    try:
+        user_id = None
+        try:
+            jwt = get_jwt()
+            user_id = get_jwt_identity()
+            print(f"DEBUG: JWT provided, user_id: {user_id}")
+        except:
+            print("DEBUG: No valid JWT provided, proceeding without authentication")
+
+        payment = Payment.query.filter_by(paystack_ref=reference).first()
+        if not payment:
+            print(f"DEBUG: Payment not found for reference: {reference}")
+            return jsonify({'message': 'Payment not found'}), 404
+        if user_id and payment.user_id != int(user_id):
+            print(f"DEBUG: User ID mismatch: payment.user_id={payment.user_id}, jwt.user_id={user_id}")
+            return jsonify({'message': 'Unauthorized access to payment'}), 403
+
+        headers = {'Authorization': f'Bearer {os.getenv("PAYSTACK_SECRET_KEY")}'}
+        try:
+            response = requests.get(
+                f'{os.getenv("PAYSTACK_BASE_URL", "https://api.paystack.co")}/transaction/verify/{reference}',
+                headers=headers,
+                timeout=15
+            )
+            response_data = response.json()
+            print(f"DEBUG: Paystack verify response: {response_data}")
+            if response.status_code != 200 or response_data['data']['status'] != 'success':
+                print(f"DEBUG: Payment verification failed: {response_data}")
+                return jsonify({'message': 'Payment verification failed', 'error': response_data}), 400
+        except requests.exceptions.RequestException as e:
+            print(f"DEBUG: Network error verifying payment: {str(e)}")
+            return jsonify({'message': f'Error verifying payment: {str(e)}'}), 500
+
+        if payment.status != 'success':
+            payment.status = 'success'
+            ticket_token = Ticket.generate_token()
+            ticket = Ticket(
+                user_id=payment.user_id,
+                movie_id=payment.movie_id,
+                payment_id=payment.id,
+                token=ticket_token,
+                ticket_type=payment.ticket_type
+            )
+            db.session.add(ticket)
+            db.session.commit()
+            print(f"DEBUG: Ticket created for payment {reference}, token: {ticket_token}")
+
+            movie = Movie.query.get(payment.movie_id)
+            user = User.query.get(payment.user_id)
+            
+            event_title = movie.title
+            event_date = str(movie.premiere_date)
+            event_time = movie.event_time or 'TBD'
+            event_location = movie.event_location or 'TBD'
+            
+            ticket_type_label = 'VIP' if payment.ticket_type == 'vip' else 'Regular'
+            flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
+            
+            email_message = f"""
+Dear {user.email},
+
+Thank you for purchasing a {ticket_type_label} ticket to the premiere of "{event_title}".
+
+Your access code is: {ticket_token}
+
+- Date: {event_date}
+- Time: {event_time}
+- Location: {event_location}
+
+Join us for an evening of drama, suspense, and intrigue. Arrive 30 minutes early for smooth entry. Complimentary refreshments and photo opportunities with the cast will be available.
+
+Thank you for your support!
+<br><img src="{flier_data_uri}" alt="Movie Flier" style="max-width: 100%; height: auto;">
+"""
+            try:
+                sendgrid_client = current_app.config['SENDGRID_CLIENT']
+                if sendgrid_client:
+                    message = Mail(
+                        from_email=current_app.config['FROM_EMAIL'],
+                        to_emails=user.email,
+                        subject=f'{ticket_type_label} Ticket for {event_title}',
+                        html_content=email_message
+                    )
+                    response = sendgrid_client.send(message)
+                    print(f"DEBUG: {ticket_type_label} Email sent to {user.email}, status: {response.status_code}")
+                else:
+                    print("DEBUG: SendGrid is disabled, skipping email")
+            except Exception as e:
+                print(f"DEBUG: SendGrid error for {user.email}: {str(e)}")
+            
+            try:
+                twilio_client = current_app.config['TWILIO_CLIENT']
+                if twilio_client and user.phone:
+                    whatsapp_message = f"""
+Dear {user.email},
+
+Thank you for purchasing a {ticket_type_label} ticket to the premiere of "{event_title}".
+
+Your access code: {ticket_token}
+
+- Date: {event_date}
+- Time: {event_time}
+- Location: {event_location}
+
+Join us for an evening of drama and intrigue. Arrive 30 minutes early for smooth entry. Complimentary refreshments and photo opportunities with the cast will be available.
+
+Thank you for your support!
+"""
+                    media_url = []
+                    if movie.flier_image:
+                        media_url = [upload_image_to_twilio(movie.flier_image, twilio_client)]
+                        media_url = [url for url in media_url if url]
+                    response = twilio_client.messages.create(
+                        from_=current_app.config['TWILIO_WHATSAPP_FROM'],
+                        body=whatsapp_message,
+                        media_url=media_url,
+                        to=f"whatsapp:{user.phone}"
+                    )
+                    print(f"DEBUG: {ticket_type_label} WhatsApp message sent to {user.phone}, SID: {response.sid}")
+                else:
+                    print(f"DEBUG: Twilio is disabled or no phone number for user {user.email}, skipping WhatsApp message")
+            except Exception as e:
+                print(f"DEBUG: Twilio error for {user.phone}: {str(e)}")
         
-        return jsonify({'message': 'Payment verified', 'ticket_token': ticket_token, 'ticket_type': payment.ticket_type})
+        return jsonify({'message': 'Payment verified', 'ticket_token': ticket_token, 'ticket_type': payment.ticket_type}), 200
     except Exception as e:
         db.session.rollback()
         print(f"DEBUG: Error in /api/payments/verify/{reference}: {str(e)}")
@@ -751,6 +985,12 @@ def send_whatsapp():
         try:
             twilio_client = current_app.config['TWILIO_CLIENT']
             if twilio_client:
+                media_url = []
+                if movie.flier_image:
+                    media_url = [upload_image_to_twilio(movie.flier_image, twilio_client)]
+                    media_url = [url for url in media_url if url]
+                print(f"DEBUG: Preparing WhatsApp messages, has_image: {bool(movie.flier_image)}, media_url: {media_url}")
+                
                 for phone in phone_list:
                     try:
                         target_user = User.query.filter_by(phone=phone).first()
@@ -766,21 +1006,16 @@ def send_whatsapp():
                             db.session.add(ticket)
                             ticket_tokens.append({'phone': phone, 'ticket_token': ticket_token})
                         
-                        media_url = []
-                        if movie.flier_image:
-                            media_url = [upload_image_to_twilio(movie.flier_image, twilio_client)]
-                            media_url = [url for url in media_url if url]
-                        print(f"DEBUG: Sending WhatsApp to {phone}, has_image: {bool(movie.flier_image)}, media_url: {media_url}")
                         body = f"VIP Event: {movie.title}\nDate: {movie.premiere_date}"
                         if ticket_token:
                             body += f"\nYour VIP ticket token: {ticket_token}"
-                        twilio_client.messages.create(
+                        response = twilio_client.messages.create(
                             from_=current_app.config['TWILIO_WHATSAPP_FROM'],
                             body=body,
                             media_url=media_url,
                             to=f"whatsapp:{phone}"
                         )
-                        print(f"DEBUG: WhatsApp message sent to {phone}")
+                        print(f"DEBUG: WhatsApp message sent to {phone}, SID: {response.sid}")
                     except Exception as e:
                         error_msg = f"Twilio error for {phone}: {str(e)}"
                         print(f"DEBUG: {error_msg}")
@@ -823,96 +1058,118 @@ def send_vip_ticket():
             print(f"DEBUG: Movie not found for movie_id: {data['movie_id']}")
             return jsonify({'message': 'Movie not found'}), 404
         
-        recipient = data['recipient'].strip()
-        phone = data['phone'].strip()
-        if data['method'] == 'email':
-            if not is_valid_email(recipient):
-                return jsonify({'message': f'Invalid email format: {recipient}'}), 400
-        if not is_valid_phone(phone):
-            return jsonify({'message': f'Invalid phone format: {phone}'}), 400
+        recipient_list = [recipient.strip() for recipient in data['recipient'].split(',')]
+        phone_list = [phone.strip() for phone in data['phone'].split(',')]
+        if len(recipient_list) != len(phone_list):
+            return jsonify({'message': 'Number of recipients and phone numbers must match'}), 400
         
-        target_user = None
         if data['method'] == 'email':
-            target_user = User.query.filter_by(email=recipient).first()
-            if not target_user:
-                print(f"DEBUG: User not found for email: {recipient}, creating new user")
-                random_password = secrets.token_urlsafe(12)
-                target_user = User(email=recipient, phone=phone)
-                target_user.set_password(random_password)
-                db.session.add(target_user)
-                db.session.commit()
-                print(f"DEBUG: New user created with email: {recipient}, phone: {phone}")
-        else:  # whatsapp
-            target_user = User.query.filter_by(phone=phone).first()
-            if not target_user:
-                print(f"DEBUG: User not found for phone: {phone}, creating new user")
-                random_email = f"vip_{secrets.token_hex(8)}@example.com"
-                random_password = secrets.token_urlsafe(12)
-                target_user = User(email=random_email, phone=phone)
-                target_user.set_password(random_password)
-                db.session.add(target_user)
-                db.session.commit()
-                print(f"DEBUG: New user created with phone: {phone}, email: {random_email}")
+            for recipient in recipient_list:
+                if not is_valid_email(recipient):
+                    return jsonify({'message': f'Invalid email format: {recipient}'}), 400
+        for phone in phone_list:
+            if not is_valid_phone(phone):
+                return jsonify({'message': f'Invalid phone format: {phone}'}), 400
         
         vip_limit = int(Setting.query.filter_by(key='vip_limit').first().value)
         vip_count = Ticket.query.filter_by(movie_id=data['movie_id'], ticket_type='vip').count()
-        if vip_count >= vip_limit:
-            print(f"DEBUG: VIP limit reached: {vip_count}/{vip_limit}")
+        if vip_count + len(phone_list) > vip_limit:
+            print(f"DEBUG: VIP limit exceeded: {vip_count + len(phone_list)}/{vip_limit}")
             return jsonify({'message': 'VIP tickets sold out'}), 400
 
-        ticket_token = Ticket.generate_token()
-        ticket = Ticket(
-            user_id=target_user.id,
-            movie_id=data['movie_id'],
-            token=ticket_token,
-            ticket_type='vip'
-        )
-        db.session.add(ticket)
-        db.session.commit()
+        ticket_tokens = []
+        errors = []
         
-        flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
-        
-        if data['method'] == 'email':
-            message = Mail(
-                from_email=current_app.config['FROM_EMAIL'],
-                to_emails=To(recipient),
-                subject=f'VIP Ticket for {movie.title}',
-                html_content=f'Your VIP ticket token: {ticket_token}<br>Movie: {movie.title}<br>Date: {movie.premiere_date}<br><img src="{flier_data_uri}" alt="Movie Flier" style="max-width: 100%; height: auto;">'
-            )
+        for recipient, phone in zip(recipient_list, phone_list):
             try:
-                sendgrid_client = current_app.config['SENDGRID_CLIENT']
-                if sendgrid_client:
-                    sendgrid_client.send(message)
-                    print(f"DEBUG: VIP email sent to {recipient}")
-                else:
-                    print("DEBUG: SendGrid is disabled, skipping email")
-            except Exception as e:
-                print(f"DEBUG: SendGrid error for {recipient}: {str(e)}")
-                return jsonify({'message': f'Error sending email: {str(e)}'}), 500
-        else:  # whatsapp
-            try:
-                twilio_client = current_app.config['TWILIO_CLIENT']
-                if twilio_client:
-                    media_url = []
-                    if movie.flier_image:
-                        media_url = [upload_image_to_twilio(movie.flier_image, twilio_client)]
-                        media_url = [url for url in media_url if url]
-                    print(f"DEBUG: Sending VIP WhatsApp to {phone}, has_image: {bool(movie.flier_image)}, media_url: {media_url}")
-                    twilio_client.messages.create(
-                        from_=current_app.config['TWILIO_WHATSAPP_FROM'],
-                        body=f"VIP Ticket\nEvent: {movie.title}\nDate: {movie.premiere_date}\nYour ticket token: {ticket_token}",
-                        media_url=media_url,
-                        to=f"whatsapp:{phone}"
+                target_user = None
+                if data['method'] == 'email':
+                    target_user = User.query.filter_by(email=recipient).first()
+                    if not target_user:
+                        print(f"DEBUG: User not found for email: {recipient}, creating new user")
+                        random_password = secrets.token_urlsafe(12)
+                        target_user = User(email=recipient, phone=phone)
+                        target_user.set_password(random_password)
+                        db.session.add(target_user)
+                        db.session.commit()
+                        print(f"DEBUG: New user created with email: {recipient}, phone: {phone}")
+                else:  # whatsapp
+                    target_user = User.query.filter_by(phone=phone).first()
+                    if not target_user:
+                        print(f"DEBUG: User not found for phone: {phone}, creating new user")
+                        random_email = f"vip_{secrets.token_hex(8)}@example.com"
+                        random_password = secrets.token_urlsafe(12)
+                        target_user = User(email=random_email, phone=phone)
+                        target_user.set_password(random_password)
+                        db.session.add(target_user)
+                        db.session.commit()
+                        print(f"DEBUG: New user created with phone: {phone}, email: {random_email}")
+                
+                ticket_token = Ticket.generate_token()
+                ticket = Ticket(
+                    user_id=target_user.id,
+                    movie_id=data['movie_id'],
+                    token=ticket_token,
+                    ticket_type='vip'
+                )
+                db.session.add(ticket)
+                ticket_tokens.append({'recipient': recipient, 'phone': phone, 'ticket_token': ticket_token})
+                
+                flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
+                
+                if data['method'] == 'email':
+                    message = Mail(
+                        from_email=current_app.config['FROM_EMAIL'],
+                        to_emails=To(recipient),
+                        subject=f'VIP Ticket for {movie.title}',
+                        html_content=f'Your VIP ticket token: {ticket_token}<br>Movie: {movie.title}<br>Date: {movie.premiere_date}<br><img src="{flier_data_uri}" alt="Movie Flier" style="max-width: 100%; height: auto;">'
                     )
-                    print(f"DEBUG: VIP WhatsApp message sent to {phone}")
-                else:
-                    print("DEBUG: Twilio is disabled, skipping WhatsApp message")
-                    return jsonify({'message': 'Twilio client not configured'}), 500
+                    try:
+                        sendgrid_client = current_app.config['SENDGRID_CLIENT']
+                        if sendgrid_client:
+                            response = sendgrid_client.send(message)
+                            print(f"DEBUG: VIP email sent to {recipient}, status: {response.status_code}")
+                        else:
+                            print("DEBUG: SendGrid is disabled, skipping email")
+                            errors.append(f"SendGrid not configured for {recipient}")
+                    except Exception as e:
+                        print(f"DEBUG: SendGrid error for {recipient}: {str(e)}")
+                        try:
+                            response_body = e.body if hasattr(e, 'body') else 'No response body'
+                            print(f"DEBUG: SendGrid response body: {response_body}")
+                            errors.append(f"Error sending email to {recipient}: {str(e)}, details: {response_body}")
+                        except:
+                            errors.append(f"Error sending email to {recipient}: {str(e)}")
+                else:  # whatsapp
+                    try:
+                        twilio_client = current_app.config['TWILIO_CLIENT']
+                        if twilio_client:
+                            media_url = []
+                            if movie.flier_image:
+                                media_url = [upload_image_to_twilio(movie.flier_image, twilio_client)]
+                                media_url = [url for url in media_url if url]
+                            print(f"DEBUG: Sending VIP WhatsApp to {phone}, has_image: {bool(movie.flier_image)}, media_url: {media_url}")
+                            response = twilio_client.messages.create(
+                                from_=current_app.config['TWILIO_WHATSAPP_FROM'],
+                                body=f"VIP Ticket\nEvent: {movie.title}\nDate: {movie.premiere_date}\nYour ticket token: {ticket_token}",
+                                media_url=media_url,
+                                to=f"whatsapp:{phone}"
+                            )
+                            print(f"DEBUG: VIP WhatsApp message sent to {phone}, SID: {response.sid}")
+                        else:
+                            print("DEBUG: Twilio is disabled, skipping WhatsApp message")
+                            errors.append(f"Twilio not configured for {phone}")
+                    except Exception as e:
+                        print(f"DEBUG: Twilio error for {phone}: {str(e)}")
+                        errors.append(f"Error sending WhatsApp to {phone}: {str(e)}")
             except Exception as e:
-                print(f"DEBUG: Twilio error for {phone}: {str(e)}")
-                return jsonify({'message': f'Error sending WhatsApp: {str(e)}'}), 500
+                print(f"DEBUG: Error processing {recipient}/{phone}: {str(e)}")
+                errors.append(f"Error for {recipient}/{phone}: {str(e)}")
         
-        return jsonify({'message': f'VIP ticket sent via {data['method']}', 'ticket_token': ticket_token})
+        db.session.commit()
+        if errors:
+            return jsonify({'message': 'Some VIP tickets failed to send', 'errors': errors, 'tickets': ticket_tokens}), 207
+        return jsonify({'message': f'VIP tickets sent via {data['method']}', 'tickets': ticket_tokens})
     except Exception as e:
         db.session.rollback()
         print(f"DEBUG: Error in /api/admin/send-vip-ticket: {str(e)}")
