@@ -35,7 +35,7 @@ def compress_image(image_data, max_size=(300, 300), quality=100):
 def upload_image_to_twilio(image_data, twilio_client):
     """Upload image to Twilio Content API and return media URL."""
     try:
-        if len(image_data) > 5 * 1024 * 1024:  # 5MB limit
+        if len(image_data) > 5 * 1024 * 1024:
             print("DEBUG: Image exceeds size limit")
             return None
         img = Image.open(io.BytesIO(image_data))
@@ -72,6 +72,82 @@ def is_valid_email(email):
 def is_valid_phone(phone):
     pattern = r'^\+?\d{10,15}$'
     return bool(re.match(pattern, phone.strip()))
+
+def get_email_template(user_email, event_title, ticket_type_label, ticket_token, movie, flier_data_uri):
+    """Generate styled email template for ticket confirmation."""
+    return f"""
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; color: #333; line-height: 1.6; background-color: #f4f4f4; padding: 20px; }}
+            .container {{ max-width: 600px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }}
+            h1 {{ color: #d32f2f; text-align: center; }}
+            h3 {{ color: #333; }}
+            p {{ margin: 10px 0; }}
+            .highlight {{ background: #ffebee; padding: 10px; border-radius: 4px; text-align: center; font-weight: bold; }}
+            .schedule {{ background: #e3f2fd; padding: 15px; border-radius: 4px; }}
+            .footer {{ text-align: center; margin-top: 20px; font-size: 12px; color: #777; }}
+            .image {{ max-width: 100%; height: auto; margin-top: 20px; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>{event_title} Premiere</h1>
+            <p>Dear {user_email},</p>
+            <p>Thank you for securing your <strong>{ticket_type_label}</strong> ticket to the highly anticipated premiere of <strong>{event_title}</strong>!</p>
+            <div class="highlight">
+                🎟 <strong>Access Code:</strong> {ticket_token}
+            </div>
+            <h3>Event Details</h3>
+            <p><strong>Date:</strong> 22nd November 2025</p>
+            <p><strong>Time:</strong> 6:00 PM</p>
+            <p><strong>Venue:</strong> Ozene Cinema, Yaba</p>
+            <p><strong>Premiere Colour Code:</strong> 🖤 Black and Deep Berry Wine</p>
+            <h3>Evening Schedule</h3>
+            <div class="schedule">
+                <p>🕕 6:00 PM – Red Carpet Arrival & Check-in</p>
+                <p>🕕 6:00–6:30 PM – Meet & Greet Session</p>
+                <p>🕖 7:00 PM – Showtime Begins</p>
+                <p>🕘 9:00 PM – Closing Moments & Curtain Call</p>
+            </div>
+            <p>🍹 Enjoy complimentary refreshments and photo opportunities with the cast!</p>
+            <p>We’re thrilled to share this cinematic experience with you. Get ready for a night of excitement, connection, and cinematic brilliance!</p>
+            {f'<img src="{flier_data_uri}" alt="Movie Flier" class="image">' if flier_data_uri else ''}
+            <p class="footer">Warm regards,<br>The {event_title} Premiere Team<br>Lights. Camera. Connection. Let the story begin! 🎥</p>
+        </div>
+    </body>
+    </html>
+    """
+
+def get_whatsapp_template(user_phone, event_title, ticket_type_label, ticket_token, movie):
+    """Generate formatted WhatsApp template for ticket confirmation."""
+    return f"""
+🎥 *{event_title} Premiere*
+
+Dear {user_phone},
+
+Thank you for securing your *{ticket_type_label}* ticket to the premiere of *{event_title}*!
+
+🎟 *Access Code*: {ticket_token}
+📅 *Date*: 22nd November 2025
+🕕 *Time*: 6:00 PM
+📍 *Venue*: Ozene Cinema, Yaba
+🎨 *Colour Code*: Black and Deep Berry Wine
+
+*Evening Schedule*:
+🕕 6:00 PM – Red Carpet Arrival & Check-in
+🕕 6:00–6:30 PM – Meet & Greet Session
+🕖 7:00 PM – Showtime Begins
+🕘 9:00 PM – Closing Moments & Curtain Call
+
+🍹 Complimentary refreshments and photo opportunities with the cast await you!
+
+We’re thrilled to share this cinematic experience with you.
+
+*Lights. Camera. Connection. Let the story begin!* 🎥
+Warm regards,
+The {event_title} Premiere Team
+"""
 
 @api_blueprint.route('/register', methods=['POST'])
 def register():
@@ -546,37 +622,8 @@ def payment_callback():
             ticket_type_label = 'VIP' if payment.ticket_type == 'vip' else 'Regular'
             flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
 
-            email_message = f"""
-Dear {user.email},
+            email_message = get_email_template(user.email, event_title, ticket_type_label, ticket_token, movie, flier_data_uri)
 
-Thank you for purchasing a {ticket_type_label} Ticket to the highly anticipated premiere of {event_title}!
-
-🎟 Access Code: {ticket_token}
-📅 Date: 22nd November 2025
-🕕 Time: 6:00 PM
-📍 Venue: Ozene Cinema, Yaba
-
-Premiere Colour Code:
-🖤 Black and Deep Berry Wine
-
-Get ready for a night filled with excitement, connection, and cinematic brilliance!
-
-Evening Lineup:
-6:00 PM – Red Carpet Arrival & Check-in
-6:00–6:30 PM – Meet & Greet session
-7:00 PM – Showtime Begins
-9:00 PM – Closing Moments & Curtain Call
-
-🍹 Complimentary refreshments and photo moments with the cast await you.
-
-We truly appreciate your support and can’t wait to share this cinematic experience with you.
-
-Lights. Camera. Connection. Let the story begin! 🎥
-
-Warm regards,
-The {event_title} Premiere Team.
-<br><img src="{flier_data_uri}" alt="Movie Flier" style="max-width: 100%; height: auto;">
-"""
             try:
                 sendgrid_client = current_app.config['SENDGRID_CLIENT']
                 if sendgrid_client:
@@ -596,36 +643,7 @@ The {event_title} Premiere Team.
             try:
                 twilio_client = current_app.config['TWILIO_CLIENT']
                 if twilio_client and user.phone:
-                    whatsapp_message = f"""
-Dear {user.phone},
-
-Thank you for purchasing a {ticket_type_label} Ticket to the highly anticipated premiere of {event_title}!
-
-🎟 Access Code: {ticket_token}
-📅 Date: 22nd November 2025
-🕕 Time: 6:00 PM
-📍 Venue: Ozene Cinema, Yaba
-
-Premiere Colour Code:
-🖤 Black and Deep Berry Wine
-
-Get ready for a night filled with excitement, connection, and cinematic brilliance!
-
-Evening Lineup:
-6:00 PM – Red Carpet Arrival & Check-in
-6:00–6:30 PM – Meet & Greet session
-7:00 PM – Showtime Begins
-9:00 PM – Closing Moments & Curtain Call
-
-🍹 Complimentary refreshments and photo moments with the cast await you.
-
-We truly appreciate your support and can’t wait to share this cinematic experience with you.
-
-Lights. Camera. Connection. Let the story begin! 🎥
-
-Warm regards,
-The {event_title} Premiere Team.
-"""
+                    whatsapp_message = get_whatsapp_template(user.phone, event_title, ticket_type_label, ticket_token, movie)
                     media_url = []
                     if movie.flier_image:
                         media_url = [upload_image_to_twilio(movie.flier_image, twilio_client)]
@@ -689,37 +707,8 @@ def payment_webhook():
                 ticket_type_label = 'VIP' if payment.ticket_type == 'vip' else 'Regular'
                 flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
 
-                email_message = f"""
-Dear {user.email},
+                email_message = get_email_template(user.email, event_title, ticket_type_label, ticket_token, movie, flier_data_uri)
 
-Thank you for purchasing a {ticket_type_label} Ticket to the highly anticipated premiere of {event_title}!
-
-🎟 Access Code: {ticket_token}
-📅 Date: 22nd November 2025
-🕕 Time: 6:00 PM
-📍 Venue: Ozene Cinema, Yaba
-
-Premiere Colour Code:
-🖤 Black and Deep Berry Wine
-
-Get ready for a night filled with excitement, connection, and cinematic brilliance!
-
-Evening Lineup:
-6:00 PM – Red Carpet Arrival & Check-in
-6:00–6:30 PM – Meet & Greet session
-7:00 PM – Showtime Begins
-9:00 PM – Closing Moments & Curtain Call
-
-🍹 Complimentary refreshments and photo moments with the cast await you.
-
-We truly appreciate your support and can’t wait to share this cinematic experience with you.
-
-Lights. Camera. Connection. Let the story begin! 🎥
-
-Warm regards,
-The {event_title} Premiere Team.
-<br><img src="{flier_data_uri}" alt="Movie Flier" style="max-width: 100%; height: auto;">
-"""
                 try:
                     sendgrid_client = current_app.config['SENDGRID_CLIENT']
                     if sendgrid_client:
@@ -739,36 +728,7 @@ The {event_title} Premiere Team.
                 try:
                     twilio_client = current_app.config['TWILIO_CLIENT']
                     if twilio_client and user.phone:
-                        whatsapp_message = f"""
-Dear {user.phone},
-
-Thank you for purchasing a {ticket_type_label} Ticket to the highly anticipated premiere of {event_title}!
-
-🎟 Access Code: {ticket_token}
-📅 Date: 22nd November 2025
-🕕 Time: 6:00 PM
-📍 Venue: Ozene Cinema, Yaba
-
-Premiere Colour Code:
-🖤 Black and Deep Berry Wine
-
-Get ready for a night filled with excitement, connection, and cinematic brilliance!
-
-Evening Lineup:
-6:00 PM – Red Carpet Arrival & Check-in
-6:00–6:30 PM – Meet & Greet session
-7:00 PM – Showtime Begins
-9:00 PM – Closing Moments & Curtain Call
-
-🍹 Complimentary refreshments and photo moments with the cast await you.
-
-We truly appreciate your support and can’t wait to share this cinematic experience with you.
-
-Lights. Camera. Connection. Let the story begin! 🎥
-
-Warm regards,
-The {event_title} Premiere Team.
-"""
+                        whatsapp_message = get_whatsapp_template(user.phone, event_title, ticket_type_label, ticket_token, movie)
                         media_url = []
                         if movie.flier_image:
                             media_url = [upload_image_to_twilio(movie.flier_image, twilio_client)]
@@ -851,37 +811,8 @@ def verify_payment(reference):
             ticket_type_label = 'VIP' if payment.ticket_type == 'vip' else 'Regular'
             flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
 
-            email_message = f"""
-Dear {user.email},
+            email_message = get_email_template(user.email, event_title, ticket_type_label, ticket_token, movie, flier_data_uri)
 
-Thank you for purchasing a {ticket_type_label} Ticket to the highly anticipated premiere of {event_title}!
-
-🎟 Access Code: {ticket_token}
-📅 Date: 22nd November 2025
-🕕 Time: 6:00 PM
-📍 Venue: Ozene Cinema, Yaba
-
-Premiere Colour Code:
-🖤 Black and Deep Berry Wine
-
-Get ready for a night filled with excitement, connection, and cinematic brilliance!
-
-Evening Lineup:
-6:00 PM – Red Carpet Arrival & Check-in
-6:00–6:30 PM – Meet & Greet session
-7:00 PM – Showtime Begins
-9:00 PM – Closing Moments & Curtain Call
-
-🍹 Complimentary refreshments and photo moments with the cast await you.
-
-We truly appreciate your support and can’t wait to share this cinematic experience with you.
-
-Lights. Camera. Connection. Let the story begin! 🎥
-
-Warm regards,
-The {event_title} Premiere Team.
-<br><img src="{flier_data_uri}" alt="Movie Flier" style="max-width: 100%; height: auto;">
-"""
             try:
                 sendgrid_client = current_app.config['SENDGRID_CLIENT']
                 if sendgrid_client:
@@ -901,36 +832,7 @@ The {event_title} Premiere Team.
             try:
                 twilio_client = current_app.config['TWILIO_CLIENT']
                 if twilio_client and user.phone:
-                    whatsapp_message = f"""
-Dear {user.phone},
-
-Thank you for purchasing a {ticket_type_label} Ticket to the highly anticipated premiere of {event_title}!
-
-🎟 Access Code: {ticket_token}
-📅 Date: 22nd November 2025
-🕕 Time: 6:00 PM
-📍 Venue: Ozene Cinema, Yaba
-
-Premiere Colour Code:
-🖤 Black and Deep Berry Wine
-
-Get ready for a night filled with excitement, connection, and cinematic brilliance!
-
-Evening Lineup:
-6:00 PM – Red Carpet Arrival & Check-in
-6:00–6:30 PM – Meet & Greet session
-7:00 PM – Showtime Begins
-9:00 PM – Closing Moments & Curtain Call
-
-🍹 Complimentary refreshments and photo moments with the cast await you.
-
-We truly appreciate your support and can’t wait to share this cinematic experience with you.
-
-Lights. Camera. Connection. Let the story begin! 🎥
-
-Warm regards,
-The {event_title} Premiere Team.
-"""
+                    whatsapp_message = get_whatsapp_template(user.phone, event_title, ticket_type_label, ticket_token, movie)
                     media_url = []
                     if movie.flier_image:
                         media_url = [upload_image_to_twilio(movie.flier_image, twilio_client)]
@@ -1017,11 +919,13 @@ def send_event_email():
 
             flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
 
+            email_message = get_email_template(email, movie.title, 'VIP', ticket_token, movie, flier_data_uri)
+
             message = Mail(
                 from_email=current_app.config['FROM_EMAIL'],
                 to_emails=To(email),
                 subject=f'VIP Ticket for {movie.title}',
-                html_content=f'Your VIP ticket token: {ticket_token}<br>Movie: {movie.title}<br>Date: {movie.premiere_date}<br><img src="{flier_data_uri}" alt="Movie Flier" style="max-width: 100%; height: auto;">'
+                html_content=email_message
             )
             try:
                 sendgrid_client = current_app.config['SENDGRID_CLIENT']
@@ -1091,12 +995,10 @@ def send_whatsapp():
                             db.session.add(ticket)
                             ticket_tokens.append({'phone': phone, 'ticket_token': ticket_token})
 
-                        body = f"VIP Event: {movie.title}\nDate: {movie.premiere_date}"
-                        if ticket_token:
-                            body += f"\nYour VIP ticket token: {ticket_token}"
+                        whatsapp_message = get_whatsapp_template(phone, movie.title, 'VIP', ticket_token, movie)
                         response = twilio_client.messages.create(
                             from_=current_app.config['TWILIO_WHATSAPP_FROM'],
-                            body=body,
+                            body=whatsapp_message,
                             media_url=media_url,
                             to=f"whatsapp:{phone}"
                         )
@@ -1203,11 +1105,12 @@ def send_vip_ticket():
                 flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
 
                 if data['method'] == 'email':
+                    email_message = get_email_template(recipient, movie.title, 'VIP', ticket_token, movie, flier_data_uri)
                     message = Mail(
                         from_email=current_app.config['FROM_EMAIL'],
                         to_emails=To(recipient),
                         subject=f'VIP Ticket for {movie.title}',
-                        html_content=f'Your VIP ticket token: {ticket_token}<br>Movie: {movie.title}<br>Date: {movie.premiere_date}<br><img src="{flier_data_uri}" alt="Movie Flier" style="max-width: 100%; height: auto;">'
+                        html_content=email_message
                     )
                     try:
                         sendgrid_client = current_app.config['SENDGRID_CLIENT']
@@ -1219,16 +1122,12 @@ def send_vip_ticket():
                             errors.append(f"SendGrid not configured for {recipient}")
                     except Exception as e:
                         print(f"DEBUG: SendGrid error for {recipient}: {str(e)}")
-                        try:
-                            response_body = e.body if hasattr(e, 'body') else 'No response body'
-                            print(f"DEBUG: SendGrid response body: {response_body}")
-                            errors.append(f"Error sending email to {recipient}: {str(e)}, details: {response_body}")
-                        except:
-                            errors.append(f"Error sending email to {recipient}: {str(e)}")
+                        errors.append(f"Error sending email to {recipient}: {str(e)}")
                 else:  # whatsapp
                     try:
                         twilio_client = current_app.config['TWILIO_CLIENT']
                         if twilio_client:
+                            whatsapp_message = get_whatsapp_template(phone, movie.title, 'VIP', ticket_token, movie)
                             media_url = []
                             if movie.flier_image:
                                 media_url = [upload_image_to_twilio(movie.flier_image, twilio_client)]
@@ -1236,7 +1135,7 @@ def send_vip_ticket():
                             print(f"DEBUG: Sending VIP WhatsApp to {phone}, has_image: {bool(movie.flier_image)}, media_url: {media_url}")
                             response = twilio_client.messages.create(
                                 from_=current_app.config['TWILIO_WHATSAPP_FROM'],
-                                body=f"VIP Ticket\nEvent: {movie.title}\nDate: {movie.premiere_date}\nYour ticket token: {ticket_token}",
+                                body=whatsapp_message,
                                 media_url=media_url,
                                 to=f"whatsapp:{phone}"
                             )
@@ -1300,11 +1199,52 @@ def send_reminder():
         if data['method'] == 'email':
             for recipient, phone in zip(recipient_list, phone_list):
                 try:
+                    email_message = f"""
+                    <html>
+                    <head>
+                        <style>
+                            body {{ font-family: Arial, sans-serif; color: #333; line-height: 1.6; background-color: #f4f4f4; padding: 20px; }}
+                            .container {{ max-width: 600px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }}
+                            h1 {{ color: #d32f2f; text-align: center; }}
+                            h3 {{ color: #333; }}
+                            p {{ margin: 10px 0; }}
+                            .highlight {{ background: #ffebee; padding: 10px; border-radius: 4px; text-align: center; font-weight: bold; }}
+                            .schedule {{ background: #e3f2fd; padding: 15px; border-radius: 4px; }}
+                            .footer {{ text-align: center; margin-top: 20px; font-size: 12px; color: #777; }}
+                            .image {{ max-width: 100%; height: auto; margin-top: 20px; }}
+                        </style>
+                    </head>
+                    <body>
+                        <div class="container">
+                            <h1>Reminder: {movie.title} Premiere</h1>
+                            <p>Dear {recipient},</p>
+                            <p>{data['message']}</p>
+                            <h3>Event Details</h3>
+                            <p><strong>Movie:</strong> {movie.title}</p>
+                            <p><strong>Date:</strong> 22nd November 2025</p>
+                            <p><strong>Time:</strong> 6:00 PM</p>
+                            <p><strong>Venue:</strong> Ozene Cinema, Yaba</p>
+                            <p><strong>Colour Code:</strong> 🖤 Black and Deep Berry Wine</p>
+                            <h3>Evening Schedule</h3>
+                            <div class="schedule">
+                                <p>🕕 6:00 PM – Red Carpet Arrival & Check-in</p>
+                                <p>🕕 6:00–6:30 PM – Meet & Greet Session</p>
+                                <p>🕖 7:00 PM – Showtime Begins</p>
+                                <p>🕘 9:00 PM – Closing Moments & Curtain Call</p>
+                            </div>
+                            <p>🍹 Complimentary refreshments and photo opportunities with the cast await you!</p>
+                            <p>We’re excited to see you at this cinematic experience!</p>
+                            {f'<img src="{flier_data_uri}" alt="Movie Flier" class="image">' if flier_data_uri else ''}
+                            <p class="footer">Warm regards,<br>The {movie.title} Premiere Team</p>
+                        </div>
+                    </body>
+                    </html>
+                    """
                     message = Mail(
                         from_email=current_app.config['FROM_EMAIL'],
                         to_emails=To(recipient),
                         subject=f'Reminder: {movie.title}',
-                        html_content=f'{data["message"]}<br>Movie: {movie.title}<br>Date: {movie.premiere_date}<br><img src="{flier_data_uri}" alt="Movie Flier" style="max-width: 100%; height: auto;">'
+                        html_content=email_message
                     )
                     sendgrid_client = current_app.config['SENDGRID_CLIENT']
                     if sendgrid_client:
@@ -1322,6 +1262,32 @@ def send_reminder():
                 if twilio_client:
                     for phone in phone_list:
                         try:
+                            whatsapp_message = f"""
+📢 *Reminder: {movie.title} Premiere*
+
+Dear {phone},
+
+{data['message']}
+
+🎥 *Event*: {movie.title}
+📅 *Date*: 22nd November 2025
+🕕 *Time*: 6:00 PM
+📍 *Venue*: Ozene Cinema, Yaba
+🎨 *Colour Code*: Black and Deep Berry Wine
+
+*Evening Schedule*:
+🕕 6:00 PM – Red Carpet Arrival & Check-in
+🕕 6:00–6:30 PM – Meet & Greet Session
+🕖 7:00 PM – Showtime Begins
+🕘 9:00 PM – Closing Moments & Curtain Call
+
+🍹 Complimentary refreshments and photo opportunities with the cast await you!
+
+We’re excited to see you there!
+
+Warm regards,
+The {movie.title} Premiere Team
+"""
                             media_url = []
                             if movie.flier_image:
                                 media_url = [upload_image_to_twilio(movie.flier_image, twilio_client)]
@@ -1329,7 +1295,7 @@ def send_reminder():
                             print(f"DEBUG: Sending reminder WhatsApp to {phone}, has_image: {bool(movie.flier_image)}, media_url: {media_url}")
                             twilio_client.messages.create(
                                 from_=current_app.config['TWILIO_WHATSAPP_FROM'],
-                                body=f"Reminder: {data['message']}\nEvent: {movie.title}\nDate: {movie.premiere_date}",
+                                body=whatsapp_message,
                                 media_url=media_url,
                                 to=f"whatsapp:{phone}"
                             )
