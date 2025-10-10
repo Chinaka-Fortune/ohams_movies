@@ -20,7 +20,7 @@ print("DEBUG: Loading routes.py with blueprint v1")
 resolver = dns.resolver.Resolver()
 resolver.nameservers = ['8.8.8.8', '8.8.4.4']
 
-def compress_image(image_data, max_size=(300, 300), quality=95):
+def compress_image(image_data, max_size=(300, 300), quality=100):
     """Compress image to JPEG with specified max size and quality."""
     try:
         img = Image.open(io.BytesIO(image_data))
@@ -66,7 +66,7 @@ def upload_image_to_twilio(image_data, twilio_client):
         return None
 
 def is_valid_email(email):
-    pattern = r'^[a-zA-Z0.9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     return bool(re.match(pattern, email.strip()))
 
 def is_valid_phone(phone):
@@ -441,7 +441,7 @@ def initialize_payment():
             'Authorization': f'Bearer {os.getenv("PAYSTACK_SECRET_KEY")}',
             'Content-Type': 'application/json'
         }
-        frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000') 
+        frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
         callback_url = f"{frontend_url}/payment-callback"
         webhook_url = f"{os.getenv('BACKEND_URL', request.host_url.rstrip('/'))}/api/payment-webhook"
         payload = {
@@ -451,7 +451,7 @@ def initialize_payment():
             'metadata': {'movie_id': movie_id, 'user_id': user.id, 'ticket_type': ticket_type, 'webhook_url': webhook_url}
         }
         print(f"DEBUG: Paystack payload: {payload}")
-        
+
         try:
             resolved_ip = resolver.resolve('api.paystack.co', 'A')
             print(f"DEBUG: Resolved api.paystack.co to {resolved_ip[0].to_text()}")
@@ -503,7 +503,7 @@ def payment_callback():
         if not reference:
             print("DEBUG: No reference provided in callback")
             return jsonify({'message': 'Missing reference'}), 400
-        
+
         payment = Payment.query.filter_by(paystack_ref=reference).first()
         if not payment:
             print(f"DEBUG: Payment not found for reference: {reference}")
@@ -541,29 +541,40 @@ def payment_callback():
 
             movie = Movie.query.get(payment.movie_id)
             user = User.query.get(payment.user_id)
-            
+
             event_title = movie.title
-            event_date = str(movie.premiere_date)
-            event_time = movie.event_time or 'TBD'
-            event_location = movie.event_location or 'TBD'
-            
             ticket_type_label = 'VIP' if payment.ticket_type == 'vip' else 'Regular'
             flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
-            
+
             email_message = f"""
 Dear {user.email},
 
-Thank you for purchasing a {ticket_type_label} ticket to the premiere of "{event_title}".
+Thank you for purchasing a {ticket_type_label} Ticket to the highly anticipated premiere of {event_title}!
 
-Your access code is: {ticket_token}
+🎟 Access Code: {ticket_token}
+📅 Date: 22nd November 2025
+🕕 Time: 6:00 PM
+📍 Venue: Ozene Cinema, Yaba
 
-- Date: {event_date}
-- Time: {event_time}
-- Location: {event_location}
+Premiere Colour Code:
+🖤 Black and Deep Berry Wine
 
-Join us for an evening of drama, suspense, and intrigue. Arrive 30 minutes early for smooth entry. Complimentary refreshments and photo opportunities with the cast will be available.
+Get ready for a night filled with excitement, connection, and cinematic brilliance!
 
-Thank you for your support!
+Evening Lineup:
+6:00 PM – Red Carpet Arrival & Check-in
+6:00–6:30 PM – Meet & Greet session
+7:00 PM – Showtime Begins
+9:00 PM – Closing Moments & Curtain Call
+
+🍹 Complimentary refreshments and photo moments with the cast await you.
+
+We truly appreciate your support and can’t wait to share this cinematic experience with you.
+
+Lights. Camera. Connection. Let the story begin! 🎥
+
+Warm regards,
+The {event_title} Premiere Team.
 <br><img src="{flier_data_uri}" alt="Movie Flier" style="max-width: 100%; height: auto;">
 """
             try:
@@ -581,24 +592,39 @@ Thank you for your support!
                     print("DEBUG: SendGrid is disabled, skipping email")
             except Exception as e:
                 print(f"DEBUG: SendGrid error for {user.email}: {str(e)}")
-            
+
             try:
                 twilio_client = current_app.config['TWILIO_CLIENT']
                 if twilio_client and user.phone:
                     whatsapp_message = f"""
-Dear {user.email},
+Dear {user.phone},
 
-Thank you for purchasing a {ticket_type_label} ticket to the premiere of "{event_title}".
+Thank you for purchasing a {ticket_type_label} Ticket to the highly anticipated premiere of {event_title}!
 
-Your access code: {ticket_token}
+🎟 Access Code: {ticket_token}
+📅 Date: 22nd November 2025
+🕕 Time: 6:00 PM
+📍 Venue: Ozene Cinema, Yaba
 
-- Date: {event_date}
-- Time: {event_time}
-- Location: {event_location}
+Premiere Colour Code:
+🖤 Black and Deep Berry Wine
 
-Join us for an evening of drama and intrigue. Arrive 30 minutes early for smooth entry. Complimentary refreshments and photo opportunities with the cast will be available.
+Get ready for a night filled with excitement, connection, and cinematic brilliance!
 
-Thank you for your support!
+Evening Lineup:
+6:00 PM – Red Carpet Arrival & Check-in
+6:00–6:30 PM – Meet & Greet session
+7:00 PM – Showtime Begins
+9:00 PM – Closing Moments & Curtain Call
+
+🍹 Complimentary refreshments and photo moments with the cast await you.
+
+We truly appreciate your support and can’t wait to share this cinematic experience with you.
+
+Lights. Camera. Connection. Let the story begin! 🎥
+
+Warm regards,
+The {event_title} Premiere Team.
 """
                     media_url = []
                     if movie.flier_image:
@@ -617,7 +643,7 @@ Thank you for your support!
                 print(f"DEBUG: Twilio error for {user.phone}: {str(e)}")
 
         frontend_url = os.getenv("FRONTEND_URL", "https://ohamsmovies.com.ng")
-        redirect_url = f"{frontend_url}/payment-callback?reference={reference}" 
+        redirect_url = f"{frontend_url}/payment-callback?reference={reference}"
         print(f"DEBUG: Payment callback processed, redirecting to: {redirect_url}")
         return redirect(redirect_url)
     except Exception as e:
@@ -658,29 +684,40 @@ def payment_webhook():
 
                 movie = Movie.query.get(payment.movie_id)
                 user = User.query.get(payment.user_id)
-                
+
                 event_title = movie.title
-                event_date = str(movie.premiere_date)
-                event_time = movie.event_time or 'TBD'
-                event_location = movie.event_location or 'TBD'
-                
                 ticket_type_label = 'VIP' if payment.ticket_type == 'vip' else 'Regular'
                 flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
-                
+
                 email_message = f"""
 Dear {user.email},
 
-Thank you for purchasing a {ticket_type_label} ticket to the premiere of "{event_title}".
+Thank you for purchasing a {ticket_type_label} Ticket to the highly anticipated premiere of {event_title}!
 
-Your access code is: {ticket_token}
+🎟 Access Code: {ticket_token}
+📅 Date: 22nd November 2025
+🕕 Time: 6:00 PM
+📍 Venue: Ozene Cinema, Yaba
 
-- Date: {event_date}
-- Time: {event_time}
-- Location: {event_location}
+Premiere Colour Code:
+🖤 Black and Deep Berry Wine
 
-Join us for an evening of drama, suspense, and intrigue. Arrive 30 minutes early for smooth entry. Complimentary refreshments and photo opportunities with the cast will be available.
+Get ready for a night filled with excitement, connection, and cinematic brilliance!
 
-Thank you for your support!
+Evening Lineup:
+6:00 PM – Red Carpet Arrival & Check-in
+6:00–6:30 PM – Meet & Greet session
+7:00 PM – Showtime Begins
+9:00 PM – Closing Moments & Curtain Call
+
+🍹 Complimentary refreshments and photo moments with the cast await you.
+
+We truly appreciate your support and can’t wait to share this cinematic experience with you.
+
+Lights. Camera. Connection. Let the story begin! 🎥
+
+Warm regards,
+The {event_title} Premiere Team.
 <br><img src="{flier_data_uri}" alt="Movie Flier" style="max-width: 100%; height: auto;">
 """
                 try:
@@ -698,24 +735,39 @@ Thank you for your support!
                         print("DEBUG: SendGrid is disabled, skipping email")
                 except Exception as e:
                     print(f"DEBUG: SendGrid error for {user.email}: {str(e)}")
-                
+
                 try:
                     twilio_client = current_app.config['TWILIO_CLIENT']
                     if twilio_client and user.phone:
                         whatsapp_message = f"""
-Dear {user.email},
+Dear {user.phone},
 
-Thank you for purchasing a {ticket_type_label} ticket to the premiere of "{event_title}".
+Thank you for purchasing a {ticket_type_label} Ticket to the highly anticipated premiere of {event_title}!
 
-Your access code: {ticket_token}
+🎟 Access Code: {ticket_token}
+📅 Date: 22nd November 2025
+🕕 Time: 6:00 PM
+📍 Venue: Ozene Cinema, Yaba
 
-- Date: {event_date}
-- Time: {event_time}
-- Location: {event_location}
+Premiere Colour Code:
+🖤 Black and Deep Berry Wine
 
-Join us for an evening of drama and intrigue. Arrive 30 minutes early for smooth entry. Complimentary refreshments and photo opportunities with the cast will be available.
+Get ready for a night filled with excitement, connection, and cinematic brilliance!
 
-Thank you for your support!
+Evening Lineup:
+6:00 PM – Red Carpet Arrival & Check-in
+6:00–6:30 PM – Meet & Greet session
+7:00 PM – Showtime Begins
+9:00 PM – Closing Moments & Curtain Call
+
+🍹 Complimentary refreshments and photo moments with the cast await you.
+
+We truly appreciate your support and can’t wait to share this cinematic experience with you.
+
+Lights. Camera. Connection. Let the story begin! 🎥
+
+Warm regards,
+The {event_title} Premiere Team.
 """
                         media_url = []
                         if movie.flier_image:
@@ -732,7 +784,7 @@ Thank you for your support!
                         print(f"DEBUG: Twilio is disabled or no phone number for user {user.email}, skipping WhatsApp message")
                 except Exception as e:
                     print(f"DEBUG: Twilio error for {user.phone}: {str(e)}")
-            
+
             return jsonify({'message': 'Webhook processed'}), 200
         else:
             print(f"DEBUG: Unhandled webhook event: {event['event']}")
@@ -794,29 +846,40 @@ def verify_payment(reference):
 
             movie = Movie.query.get(payment.movie_id)
             user = User.query.get(payment.user_id)
-            
+
             event_title = movie.title
-            event_date = str(movie.premiere_date)
-            event_time = movie.event_time or 'TBD'
-            event_location = movie.event_location or 'TBD'
-            
             ticket_type_label = 'VIP' if payment.ticket_type == 'vip' else 'Regular'
             flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
-            
+
             email_message = f"""
 Dear {user.email},
 
-Thank you for purchasing a {ticket_type_label} ticket to the premiere of "{event_title}".
+Thank you for purchasing a {ticket_type_label} Ticket to the highly anticipated premiere of {event_title}!
 
-Your access code is: {ticket_token}
+🎟 Access Code: {ticket_token}
+📅 Date: 22nd November 2025
+🕕 Time: 6:00 PM
+📍 Venue: Ozene Cinema, Yaba
 
-- Date: {event_date}
-- Time: {event_time}
-- Location: {event_location}
+Premiere Colour Code:
+🖤 Black and Deep Berry Wine
 
-Join us for an evening of drama, suspense, and intrigue. Arrive 30 minutes early for smooth entry. Complimentary refreshments and photo opportunities with the cast will be available.
+Get ready for a night filled with excitement, connection, and cinematic brilliance!
 
-Thank you for your support!
+Evening Lineup:
+6:00 PM – Red Carpet Arrival & Check-in
+6:00–6:30 PM – Meet & Greet session
+7:00 PM – Showtime Begins
+9:00 PM – Closing Moments & Curtain Call
+
+🍹 Complimentary refreshments and photo moments with the cast await you.
+
+We truly appreciate your support and can’t wait to share this cinematic experience with you.
+
+Lights. Camera. Connection. Let the story begin! 🎥
+
+Warm regards,
+The {event_title} Premiere Team.
 <br><img src="{flier_data_uri}" alt="Movie Flier" style="max-width: 100%; height: auto;">
 """
             try:
@@ -834,24 +897,39 @@ Thank you for your support!
                     print("DEBUG: SendGrid is disabled, skipping email")
             except Exception as e:
                 print(f"DEBUG: SendGrid error for {user.email}: {str(e)}")
-            
+
             try:
                 twilio_client = current_app.config['TWILIO_CLIENT']
                 if twilio_client and user.phone:
                     whatsapp_message = f"""
-Dear {user.email},
+Dear {user.phone},
 
-Thank you for purchasing a {ticket_type_label} ticket to the premiere of "{event_title}".
+Thank you for purchasing a {ticket_type_label} Ticket to the highly anticipated premiere of {event_title}!
 
-Your access code: {ticket_token}
+🎟 Access Code: {ticket_token}
+📅 Date: 22nd November 2025
+🕕 Time: 6:00 PM
+📍 Venue: Ozene Cinema, Yaba
 
-- Date: {event_date}
-- Time: {event_time}
-- Location: {event_location}
+Premiere Colour Code:
+🖤 Black and Deep Berry Wine
 
-Join us for an evening of drama and intrigue. Arrive 30 minutes early for smooth entry. Complimentary refreshments and photo opportunities with the cast will be available.
+Get ready for a night filled with excitement, connection, and cinematic brilliance!
 
-Thank you for your support!
+Evening Lineup:
+6:00 PM – Red Carpet Arrival & Check-in
+6:00–6:30 PM – Meet & Greet session
+7:00 PM – Showtime Begins
+9:00 PM – Closing Moments & Curtain Call
+
+🍹 Complimentary refreshments and photo moments with the cast await you.
+
+We truly appreciate your support and can’t wait to share this cinematic experience with you.
+
+Lights. Camera. Connection. Let the story begin! 🎥
+
+Warm regards,
+The {event_title} Premiere Team.
 """
                     media_url = []
                     if movie.flier_image:
@@ -869,7 +947,6 @@ Thank you for your support!
             except Exception as e:
                 print(f"DEBUG: Twilio error for {user.phone}: {str(e)}")
         else:
-            # If payment is already 'success', fetch existing ticket
             ticket = Ticket.query.filter_by(payment_id=payment.id).first()
             if ticket:
                 ticket_token = ticket.token
@@ -903,7 +980,7 @@ def send_event_email():
         if not movie:
             print(f"DEBUG: Movie not found for movie_id: {data['movie_id']}")
             return jsonify({'message': 'Movie not found'}), 404
-        
+
         email_list = [email.strip() for email in data['email'].split(',')]
         phone_list = [phone.strip() for phone in data['phone'].split(',')]
         if len(email_list) != len(phone_list):
@@ -914,9 +991,9 @@ def send_event_email():
         for phone in phone_list:
             if not is_valid_phone(phone):
                 return jsonify({'message': f'Invalid phone format: {phone}'}), 400
-        
+
         ticket_tokens = []
-        
+
         for email, phone in zip(email_list, phone_list):
             target_user = User.query.filter_by(email=email).first()
             if not target_user:
@@ -927,7 +1004,7 @@ def send_event_email():
                 db.session.add(target_user)
                 db.session.commit()
                 print(f"DEBUG: New user created with email: {email}, phone: {phone}")
-            
+
             ticket_token = Ticket.generate_token()
             ticket = Ticket(
                 user_id=target_user.id,
@@ -937,13 +1014,13 @@ def send_event_email():
             )
             db.session.add(ticket)
             ticket_tokens.append({'email': email, 'ticket_token': ticket_token})
-            
+
             flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
-            
+
             message = Mail(
                 from_email=current_app.config['FROM_EMAIL'],
                 to_emails=To(email),
-                subject=f'VIP Event: {movie.title}',
+                subject=f'VIP Ticket for {movie.title}',
                 html_content=f'Your VIP ticket token: {ticket_token}<br>Movie: {movie.title}<br>Date: {movie.premiere_date}<br><img src="{flier_data_uri}" alt="Movie Flier" style="max-width: 100%; height: auto;">'
             )
             try:
@@ -955,7 +1032,7 @@ def send_event_email():
                     print("DEBUG: SendGrid is disabled, skipping email")
             except Exception as e:
                 print(f"DEBUG: SendGrid error for {email}: {str(e)}")
-        
+
         db.session.commit()
         return jsonify({'message': 'Emails sent', 'tickets': ticket_tokens})
     except Exception as e:
@@ -981,15 +1058,15 @@ def send_whatsapp():
         if not movie:
             print(f"DEBUG: Movie not found for movie_id: {movie_id}")
             return jsonify({'message': 'Movie not found'}), 404
-        
+
         phone_list = [phone.strip() for phone in data['phone'].split(',')]
         for phone in phone_list:
             if not is_valid_phone(phone):
                 return jsonify({'message': f'Invalid phone format: {phone}'}), 400
-        
+
         errors = []
         ticket_tokens = []
-        
+
         try:
             twilio_client = current_app.config['TWILIO_CLIENT']
             if twilio_client:
@@ -998,7 +1075,7 @@ def send_whatsapp():
                     media_url = [upload_image_to_twilio(movie.flier_image, twilio_client)]
                     media_url = [url for url in media_url if url]
                 print(f"DEBUG: Preparing WhatsApp messages, has_image: {bool(movie.flier_image)}, media_url: {media_url}")
-                
+
                 for phone in phone_list:
                     try:
                         target_user = User.query.filter_by(phone=phone).first()
@@ -1013,7 +1090,7 @@ def send_whatsapp():
                             )
                             db.session.add(ticket)
                             ticket_tokens.append({'phone': phone, 'ticket_token': ticket_token})
-                        
+
                         body = f"VIP Event: {movie.title}\nDate: {movie.premiere_date}"
                         if ticket_token:
                             body += f"\nYour VIP ticket token: {ticket_token}"
@@ -1060,17 +1137,17 @@ def send_vip_ticket():
             return jsonify({'message': 'Missing required fields: movie_id, recipient, phone, method'}), 400
         if data['method'] not in ['email', 'whatsapp']:
             return jsonify({'message': 'Invalid method: must be email or whatsapp'}), 400
-        
+
         movie = Movie.query.get(data['movie_id'])
         if not movie:
             print(f"DEBUG: Movie not found for movie_id: {data['movie_id']}")
             return jsonify({'message': 'Movie not found'}), 404
-        
+
         recipient_list = [recipient.strip() for recipient in data['recipient'].split(',')]
         phone_list = [phone.strip() for phone in data['phone'].split(',')]
         if len(recipient_list) != len(phone_list):
             return jsonify({'message': 'Number of recipients and phone numbers must match'}), 400
-        
+
         if data['method'] == 'email':
             for recipient in recipient_list:
                 if not is_valid_email(recipient):
@@ -1078,7 +1155,7 @@ def send_vip_ticket():
         for phone in phone_list:
             if not is_valid_phone(phone):
                 return jsonify({'message': f'Invalid phone format: {phone}'}), 400
-        
+
         vip_limit = int(Setting.query.filter_by(key='vip_limit').first().value)
         vip_count = Ticket.query.filter_by(movie_id=data['movie_id'], ticket_type='vip').count()
         if vip_count + len(phone_list) > vip_limit:
@@ -1087,7 +1164,7 @@ def send_vip_ticket():
 
         ticket_tokens = []
         errors = []
-        
+
         for recipient, phone in zip(recipient_list, phone_list):
             try:
                 target_user = None
@@ -1112,7 +1189,7 @@ def send_vip_ticket():
                         db.session.add(target_user)
                         db.session.commit()
                         print(f"DEBUG: New user created with phone: {phone}, email: {random_email}")
-                
+
                 ticket_token = Ticket.generate_token()
                 ticket = Ticket(
                     user_id=target_user.id,
@@ -1122,9 +1199,9 @@ def send_vip_ticket():
                 )
                 db.session.add(ticket)
                 ticket_tokens.append({'recipient': recipient, 'phone': phone, 'ticket_token': ticket_token})
-                
+
                 flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
-                
+
                 if data['method'] == 'email':
                     message = Mail(
                         from_email=current_app.config['FROM_EMAIL'],
@@ -1173,7 +1250,7 @@ def send_vip_ticket():
             except Exception as e:
                 print(f"DEBUG: Error processing {recipient}/{phone}: {str(e)}")
                 errors.append(f"Error for {recipient}/{phone}: {str(e)}")
-        
+
         db.session.commit()
         if errors:
             return jsonify({'message': 'Some VIP tickets failed to send', 'errors': errors, 'tickets': ticket_tokens}), 207
@@ -1197,17 +1274,17 @@ def send_reminder():
             return jsonify({'message': 'Missing required fields: movie_id, recipients, phones, method, message'}), 400
         if data['method'] not in ['email', 'whatsapp']:
             return jsonify({'message': 'Invalid method: must be email or whatsapp'}), 400
-        
+
         movie = Movie.query.get(data['movie_id'])
         if not movie:
             print(f"DEBUG: Movie not found for movie_id: {data['movie_id']}")
             return jsonify({'message': 'Movie not found'}), 404
-        
+
         recipient_list = [recipient.strip() for recipient in data['recipients'].split(',')]
         phone_list = [phone.strip() for phone in data['phones'].split(',')]
         if len(recipient_list) != len(phone_list):
             return jsonify({'message': 'Number of recipients and phone numbers must match'}), 400
-        
+
         if data['method'] == 'email':
             for recipient in recipient_list:
                 if not is_valid_email(recipient):
@@ -1215,11 +1292,11 @@ def send_reminder():
         for phone in phone_list:
             if not is_valid_phone(phone):
                 return jsonify({'message': f'Invalid phone format: {phone}'}), 400
-        
+
         errors = []
-        
+
         flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
-        
+
         if data['method'] == 'email':
             for recipient, phone in zip(recipient_list, phone_list):
                 try:
@@ -1269,7 +1346,7 @@ def send_reminder():
                 error_msg = f'Twilio error: {str(e)}'
                 print(f"DEBUG: {error_msg}")
                 return jsonify({'message': error_msg}), 500
-        
+
         if errors:
             return jsonify({'message': 'Some reminder messages failed', 'errors': errors}), 207
         return jsonify({'message': 'Reminder messages sent'})
@@ -1289,8 +1366,6 @@ def update_settings():
         data = request.json
         vip_price = data.get('vip_price')
         vip_limit = data.get('vip_limit')
-        if vip_price is None and vip_limit is None:
-            return jsonify({'message': 'At least one setting (vip_price or vip_limit) required'}), 400
         if vip_price is None and vip_limit is None:
             return jsonify({'message': 'At least one setting (vip_price or vip_limit) required'}), 400
         if vip_price is not None:
