@@ -517,7 +517,7 @@ def initialize_payment():
             'Authorization': f'Bearer {os.getenv("PAYSTACK_SECRET_KEY")}',
             'Content-Type': 'application/json'
         }
-        frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+        frontend_url = os.getenv('FRONTEND_URL', 'https://ohamsmovies.com.ng')
         callback_url = f"{frontend_url}/payment-callback"
         webhook_url = f"{os.getenv('BACKEND_URL', request.host_url.rstrip('/'))}/api/payment-webhook"
         payload = {
@@ -781,10 +781,13 @@ def verify_payment(reference):
                 timeout=15
             )
             response_data = response.json()
-            print(f"DEBUG: Paystack verify response: {response_data}")
-            if response.status_code != 200 or response_data['data']['status'] != 'success':
-                print(f"DEBUG: Payment verification failed: {response_data}")
-                return jsonify({'message': 'Payment verification failed', 'error': response_data}), 400
+            print(f"DEBUG: Paystack verify response: Status={response.status_code}, Data={response_data}")
+            if response.status_code != 200:
+                print(f"DEBUG: Paystack error: {response_data.get('message', 'Unknown error')}")
+                return jsonify({'message': 'Payment verification failed', 'error': response_data.get('message', 'Unknown error')}), 400
+            if response_data['data']['status'] != 'success':
+                print(f"DEBUG: Payment verification failed: Status={response_data['data']['status']}, Gateway Response={response_data['data'].get('gateway_response', 'N/A')}")
+                return jsonify({'message': f'Payment not successful: {response_data["data"]["status"]}', 'error': response_data}), 400
         except requests.exceptions.RequestException as e:
             print(f"DEBUG: Network error verifying payment: {str(e)}")
             return jsonify({'message': f'Error verifying payment: {str(e)}'}), 500
@@ -792,7 +795,12 @@ def verify_payment(reference):
         ticket_token = None
         if payment.status != 'success':
             payment.status = 'success'
-            ticket_token = Ticket.generate_token()
+            try:
+                ticket_token = Ticket.generate_token()
+            except Exception as e:
+                print(f"DEBUG: Token generation failed: {str(e)}")
+                return jsonify({'message': f'Error generating ticket token: {str(e)}'}), 500
+
             ticket = Ticket(
                 user_id=payment.user_id,
                 movie_id=payment.movie_id,
@@ -801,21 +809,40 @@ def verify_payment(reference):
                 ticket_type=payment.ticket_type
             )
             db.session.add(ticket)
-            db.session.commit()
-            print(f"DEBUG: Ticket created for payment {reference}, token: {ticket_token}")
+            try:
+                db.session.commit()
+                print(f"DEBUG: Ticket created for payment {reference}, token: {ticket_token}")
+            except Exception as e:
+                db.session.rollback()
+                print(f"DEBUG: Database commit failed: {str(e)}, type: {type(e).__name__}")
+                return jsonify({'message': f'Database error: {str(e)}', 'error_type': type(e).__name__}), 500
 
             movie = Movie.query.get(payment.movie_id)
             user = User.query.get(payment.user_id)
+            if not movie or not user:
+                print(f"DEBUG: Missing movie ({payment.movie_id}) or user ({payment.user_id})")
+                return jsonify({'message': 'Movie or user not found'}), 404
 
             event_title = movie.title
             ticket_type_label = 'VIP' if payment.ticket_type == 'vip' else 'Regular'
-            flier_data_uri = f"data:image/jpeg;base64,{base64.b64encode(movie.flier_image).decode('utf-8')}" if movie.flier_image else ""
-
-            email_message = get_email_template(user.email, event_title, ticket_type_label, ticket_token, movie, flier_data_uri)
+            flier_data_uri = ""
+            if movie.flier_image:
+                try:
+                    img = Image.open(io.BytesIO(movie.flier_image))
+                    image_format = img.format.lower() if img.format else 'jpeg'
+                    image_size = len(movie.flier_image)
+                    print(f"DEBUG: Flier image format: {image_format}, size: {image_size} bytes")
+                    if image_format in ['jpeg', 'png'] and image_size <= 16 * 1024 * 1024:
+                        flier_data_uri = f"data:image/{image_format};base64,{base64.b64encode(movie.flier_image).decode('utf-8')}"
+                    else:
+                        print(f"DEBUG: Invalid flier image format ({image_format}) or size ({image_size} bytes) for WhatsApp")
+                except Exception as e:
+                    print(f"DEBUG: Failed to process flier image: {str(e)}")
 
             try:
                 sendgrid_client = current_app.config['SENDGRID_CLIENT']
                 if sendgrid_client:
+                    email_message = get_email_template(user.email, event_title, ticket_type_label, ticket_token, movie, flier_data_uri)
                     message = Mail(
                         from_email=current_app.config['FROM_EMAIL'],
                         to_emails=user.email,
@@ -823,20 +850,18 @@ def verify_payment(reference):
                         html_content=email_message
                     )
                     response = sendgrid_client.send(message)
-                    print(f"DEBUG: {ticket_type_label} Email sent to {user.email}, status: {response.status_code}")
+                    print(f"DEBUG: {ticket_type_label} Email sent to {user.email}, status: {response.status_code}, headers: {response.headers}")
                 else:
                     print("DEBUG: SendGrid is disabled, skipping email")
             except Exception as e:
-                print(f"DEBUG: SendGrid error for {user.email}: {str(e)}")
+                print(f"DEBUG: SendGrid error for {user.email}: {str(e)}, type: {type(e).__name__}")
 
             try:
                 twilio_client = current_app.config['TWILIO_CLIENT']
                 if twilio_client and user.phone:
                     whatsapp_message = get_whatsapp_template(user.phone, event_title, ticket_type_label, ticket_token, movie)
-                    media_url = []
-                    if movie.flier_image:
-                        media_url = [upload_image_to_twilio(movie.flier_image, twilio_client)]
-                        media_url = [url for url in media_url if url]
+                    media_url = [flier_data_uri] if flier_data_uri else []
+                    print(f"DEBUG: WhatsApp media_url: {media_url}")
                     response = twilio_client.messages.create(
                         from_=current_app.config['TWILIO_WHATSAPP_FROM'],
                         body=whatsapp_message,
@@ -847,7 +872,8 @@ def verify_payment(reference):
                 else:
                     print(f"DEBUG: Twilio is disabled or no phone number for user {user.email}, skipping WhatsApp message")
             except Exception as e:
-                print(f"DEBUG: Twilio error for {user.phone}: {str(e)}")
+                print(f"DEBUG: Twilio error for {user.phone}: {str(e)}, type: {type(e).__name__}")
+
         else:
             ticket = Ticket.query.filter_by(payment_id=payment.id).first()
             if ticket:
@@ -1080,7 +1106,7 @@ def send_vip_ticket():
                         db.session.add(target_user)
                         db.session.commit()
                         print(f"DEBUG: New user created with email: {recipient}, phone: {phone}")
-                else:  # whatsapp
+                else:
                     target_user = User.query.filter_by(phone=phone).first()
                     if not target_user:
                         print(f"DEBUG: User not found for phone: {phone}, creating new user")
@@ -1123,7 +1149,7 @@ def send_vip_ticket():
                     except Exception as e:
                         print(f"DEBUG: SendGrid error for {recipient}: {str(e)}")
                         errors.append(f"Error sending email to {recipient}: {str(e)}")
-                else:  # whatsapp
+                else:
                     try:
                         twilio_client = current_app.config['TWILIO_CLIENT']
                         if twilio_client:
