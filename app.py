@@ -14,98 +14,146 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# Update CORS with your actual frontend URL
-CORS(app, resources={r"/api/*": {
-    "origins": [
-        "http://localhost:3000",
-        "https://movie-frontend-3173.onrender.com",
-        "https://ohams-movies-i2kb.vercel.app",
-        "https://*.vercel.app",
-        "https://*.onrender.com",
-        "https://www.ohamsmovies.com.ng",
-        "https://ohamsmovies.com.ng"
-    ],
-    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    "allow_headers": ["Content-Type", "Authorization"],
-    "supports_credentials": True
-}})
 
-# Configuration from .env
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['JWT_SECRET_KEY'] = os.getenv('JWT_SECRET_KEY')
-app.config['SENDGRID_CLIENT'] = SendGridAPIClient(os.getenv('SENDGRID_API_KEY'))
-app.config['TWILIO_CLIENT'] = Client(os.getenv('TWILIO_ACCOUNT_SID'), os.getenv('TWILIO_AUTH_TOKEN'))
-app.config['TWILIO_WHATSAPP_FROM'] = os.getenv('TWILIO_WHATSAPP_FROM')
-app.config['FROM_EMAIL'] = os.getenv('FROM_EMAIL', 'default@example.com')
+CORS(
+    app,
+    resources={
+        r"/api/*": {
+            "origins": [
+                "http://localhost:3000",
+                "https://movie-frontend-3173.onrender.com",
+                "https://ohams-movies-i2kb.vercel.app",
+                "https://*.vercel.app",
+                "https://*.onrender.com",
+                "https://www.ohamsmovies.com.ng",
+                "https://ohamsmovies.com.ng",
+            ],
+            "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            "allow_headers": ["Content-Type", "Authorization"],
+            "supports_credentials": True,
+        }
+    },
+)
 
-# Validate required environment variables
+
+app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL")
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
+app.config["SENDGRID_CLIENT"] = SendGridAPIClient(os.getenv("SENDGRID_API_KEY"))
+app.config["TWILIO_CLIENT"] = Client(
+    os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN")
+)
+app.config["TWILIO_WHATSAPP_FROM"] = os.getenv("TWILIO_WHATSAPP_FROM")
+app.config["FROM_EMAIL"] = os.getenv("FROM_EMAIL", "default@example.com")
+
+
 required_env_vars = [
-    'DATABASE_URL', 'JWT_SECRET_KEY', 'SENDGRID_API_KEY',
-    'TWILIO_ACCOUNT_SID', 'TWILIO_AUTH_TOKEN', 'TWILIO_WHATSAPP_FROM',
-    'PAYSTACK_SECRET_KEY', 'PAYSTACK_BASE_URL'
+    "DATABASE_URL",
+    "JWT_SECRET_KEY",
+    "SENDGRID_API_KEY",
+    "TWILIO_ACCOUNT_SID",
+    "TWILIO_AUTH_TOKEN",
+    "TWILIO_WHATSAPP_FROM",
+    "PAYSTACK_SECRET_KEY",
+    "PAYSTACK_BASE_URL",
 ]
 for var in required_env_vars:
     if not os.getenv(var):
         raise EnvironmentError(f"Missing required environment variable: {var}")
 
-# Health check endpoint
-@app.route('/health')
+
+@app.route("/health")
 def health():
-    return jsonify({'status': 'healthy', 'service': 'movie-backend'}), 200
+    return jsonify({"status": "healthy", "service": "movie-backend"}), 200
 
-# Root endpoint
-@app.route('/')
+
+@app.route("/")
 def index():
-    return jsonify({
-        'message': 'Movie Backend API',
-        'version': '1.0',
-        'endpoints': {
-            'health': '/health',
-            'api': '/api/*'
-        }
-    }), 200
+    return (
+        jsonify(
+            {
+                "message": "Movie Backend API",
+                "version": "1.0",
+                "endpoints": {"health": "/health", "api": "/api/*"},
+            }
+        ),
+        200,
+    )
 
-# Debug middleware
 @app.before_request
 def log_request():
-    headers = {k: v for k, v in request.headers.items() if k not in ['Authorization']}
+    headers = {
+        k: v for k, v in request.headers.items() if k not in ["Authorization"]
+    }
     print(f"DEBUG: {request.method} request to {request.path}")
     print(f"DEBUG: Origin: {request.headers.get('Origin')}")
     print(f"DEBUG: Headers: {headers}")
 
+
 db.init_app(app)
 jwt = JWTManager(app)
 migrate = Migrate(app, db)
+
 
 def init_app(app):
     with app.app_context():
         db.create_all()
         init_db(app)
 
+
 init_app(app)
 
-# JWT error handlers
 @jwt.invalid_token_loader
 def invalid_token_callback(error):
     print(f"DEBUG: JWT invalid token error: {error}")
-    return jsonify({'message': 'Invalid token', 'error': str(error)}), 401
+    return jsonify({"message": "Invalid token", "error": str(error)}), 401
+
 
 @jwt.unauthorized_loader
 def unauthorized_callback(error):
     print(f"DEBUG: JWT unauthorized error: {error}")
-    return jsonify({'message': 'Missing or invalid token', 'error': str(error)}), 401
+    return jsonify({"message": "Missing or invalid token", "error": str(error)}), 401
+
 
 @jwt.expired_token_loader
 def expired_token_callback(jwt_header, jwt_payload):
     print(f"DEBUG: JWT expired token error: {jwt_payload}")
-    return jsonify({'message': 'Token expired', 'error': 'Token has expired'}), 401
+    return jsonify({"message": "Token expired", "error": "Token has expired"}), 401
 
-# Register API routes
+
 from routes import api_blueprint
-app.register_blueprint(api_blueprint, url_prefix='/api')
+
+app.register_blueprint(api_blueprint, url_prefix="/api")
 print("DEBUG: Registered api_blueprint with /api prefix")
 
-if __name__ == '__main__':
-    port = int(os.getenv('PORT', 5000))
-    app.run(debug=False, host='0.0.0.0', port=port)
+
+
+@app.after_request
+def after_request(response):
+    """
+    Guarantees CORS headers are present even if Flask-CORS is bypassed
+    (common on Vercel cold-starts or when preflight hits a non-/api route).
+    """
+    origin = request.headers.get("Origin")
+    allowed_origins = [
+        "https://ohamsmovies.com.ng",
+        "https://www.ohamsmovies.com.ng",
+        "https://movie-frontend-3173.onrender.com",
+        "http://localhost:3000",
+    ]
+
+    if origin in allowed_origins:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Headers"] = (
+            "Content-Type,Authorization"
+        )
+        response.headers["Access-Control-Allow-Methods"] = (
+            "GET,POST,PUT,DELETE,OPTIONS"
+        )
+    return response
+
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 5000))
+    app.run(debug=False, host="0.0.0.0", port=port)
