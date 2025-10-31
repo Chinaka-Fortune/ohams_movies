@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 from flask_jwt_extended import JWTManager
 from flask_cors import CORS
 from sendgrid import SendGridAPIClient
@@ -13,7 +13,6 @@ import os
 load_dotenv()
 
 app = Flask(__name__)
-
 
 CORS(
     app,
@@ -34,7 +33,6 @@ CORS(
         }
     },
 )
-
 
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
@@ -60,7 +58,6 @@ required_env_vars = [
 for var in required_env_vars:
     if not os.getenv(var):
         raise EnvironmentError(f"Missing required environment variable: {var}")
-
 
 @app.route("/health")
 def health():
@@ -127,12 +124,11 @@ app.register_blueprint(api_blueprint, url_prefix="/api")
 print("DEBUG: Registered api_blueprint with /api prefix")
 
 
-
 @app.after_request
 def after_request(response):
     """
-    Guarantees CORS headers are present even if Flask-CORS is bypassed
-    (common on Vercel cold-starts or when preflight hits a non-/api route).
+    Ensures CORS headers are present on ALL responses,
+    including preflight OPTIONS (204) which bypass normal view logic.
     """
     origin = request.headers.get("Origin")
     allowed_origins = [
@@ -145,12 +141,9 @@ def after_request(response):
     if origin in allowed_origins:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
-        response.headers["Access-Control-Allow-Headers"] = (
-            "Content-Type,Authorization"
-        )
-        response.headers["Access-Control-Allow-Methods"] = (
-            "GET,POST,PUT,DELETE,OPTIONS"
-        )
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
+        response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,DELETE,OPTIONS"
+
     return response
 
 
