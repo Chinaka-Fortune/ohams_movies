@@ -19,6 +19,8 @@ CORS(app, resources={r"/api/*": {
     "origins": [
         "http://localhost:3000",
         "https://movie-frontend-3173.onrender.com",
+        "https://ohams-movies-i2kb.vercel.app",
+        "https://*.vercel.app",
         "https://*.onrender.com",
         "https://ohamsmovies.com.ng"
     ],
