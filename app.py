@@ -9,7 +9,7 @@ from models import init_db
 from flask_migrate import Migrate
 import os
 
-# Load .env file
+# Load .env
 load_dotenv()
 
 app = Flask(__name__)
