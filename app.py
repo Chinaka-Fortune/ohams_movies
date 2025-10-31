@@ -22,6 +22,7 @@ CORS(app, resources={r"/api/*": {
         "https://ohams-movies-i2kb.vercel.app",
         "https://*.vercel.app",
         "https://*.onrender.com",
+        "https://www.ohamsmovies.com.ng",
         "https://ohamsmovies.com.ng"
     ],
     "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
