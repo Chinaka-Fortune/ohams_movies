@@ -25,8 +25,7 @@ multidict==6.6.3
 paystack-sdk==1.0.1
 pillow==11.3.0
 propcache==0.3.2
-psycopg==3.2.1
-psycopg2==2.9.10
+psycopg[c]==3.2.1
 PyJWT==2.10.1
 python-dateutil==2.9.0.post0
 python-dotenv==1.0.1
