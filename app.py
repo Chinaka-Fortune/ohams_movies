@@ -126,10 +126,6 @@ print("DEBUG: Registered api_blueprint with /api prefix")
 
 @app.after_request
 def after_request(response):
-    """
-    Ensures CORS headers are present on ALL responses,
-    including preflight OPTIONS (204) which bypass normal view logic.
-    """
     origin = request.headers.get("Origin")
     allowed_origins = [
         "https://ohamsmovies.com.ng",
@@ -137,14 +133,18 @@ def after_request(response):
         "https://movie-frontend-3173.onrender.com",
         "http://localhost:3000",
     ]
-
     if origin in allowed_origins:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
         response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,DELETE,OPTIONS"
-
+        
     return response
+
+def handler(event, context):
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+    return app(event, context)
 
 
 if __name__ == "__main__":
