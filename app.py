@@ -24,6 +24,7 @@ CORS(
                 "https://ohams-movies-i2kb.vercel.app",
                 "https://*.vercel.app",
                 # "https://*.onrender.com",
+                "ohams-movies.vercel.app",
                 "https://www.ohamsmovies.com.ng",
                 "https://ohamsmovies.com.ng",
             ],
@@ -128,6 +129,7 @@ def after_request(response):
         "https://ohamsmovies.com.ng",
         "https://www.ohamsmovies.com.ng",
         "https://movie-frontend-3173.onrender.com",
+        "ohams-movies.vercel.app",
         "http://localhost:3000",
     ]
     if origin in allowed_origins:
