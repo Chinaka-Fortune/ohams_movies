@@ -23,7 +23,7 @@ CORS(
                 "https://movie-frontend-3173.onrender.com",
                 "https://ohams-movies-i2kb.vercel.app",
                 "https://*.vercel.app",
-                "https://*.onrender.com",
+                # "https://*.onrender.com",
                 "https://www.ohamsmovies.com.ng",
                 "https://ohamsmovies.com.ng",
             ],
@@ -44,7 +44,6 @@ app.config["TWILIO_CLIENT"] = Client(
 app.config["TWILIO_WHATSAPP_FROM"] = os.getenv("TWILIO_WHATSAPP_FROM")
 app.config["FROM_EMAIL"] = os.getenv("FROM_EMAIL", "default@example.com")
 
-
 required_env_vars = [
     "DATABASE_URL",
     "JWT_SECRET_KEY",
@@ -62,7 +61,6 @@ for var in required_env_vars:
 @app.route("/health")
 def health():
     return jsonify({"status": "healthy", "service": "movie-backend"}), 200
-
 
 @app.route("/")
 def index():
@@ -122,7 +120,6 @@ from routes import api_blueprint
 
 app.register_blueprint(api_blueprint, url_prefix="/api")
 print("DEBUG: Registered api_blueprint with /api prefix")
-
 
 @app.after_request
 def after_request(response):
