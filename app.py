@@ -7,7 +7,6 @@ from dotenv import load_dotenv
 from extensions import db
 from models import init_db
 from flask_migrate import Migrate
-import psycopg
 import os
 
 # ------------------------------------------------------------------
