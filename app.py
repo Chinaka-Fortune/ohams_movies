@@ -39,11 +39,21 @@ app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
 app.config["SENDGRID_CLIENT"] = SendGridAPIClient(os.getenv("SENDGRID_API_KEY"))
-app.config["TWILIO_CLIENT"] = Client(
-    os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN")
-)
-app.config["TWILIO_WHATSAPP_FROM"] = os.getenv("TWILIO_WHATSAPP_FROM")
-app.config["FROM_EMAIL"] = os.getenv("FROM_EMAIL", "default@example.com")
+
+def get_twilio_client():
+    sid = os.getenv("TWILIO_ACCOUNT_SID")
+    token = os.getenv("TWILIO_AUTH_TOKEN")
+    if not sid or not token:
+        raise ValueError("Twilio credentials missing")
+    return Client(sid, token)
+
+# Add helper
+def get_config(key, default=None):
+    return os.getenv(key, default)
+
+# Use in routes:
+from_email = get_config("FROM_EMAIL", "no-reply@ohamsmovies.com.ng")
+whatsapp_from = get_config("TWILIO_WHATSAPP_FROM")
 
 required_env_vars = [
     "DATABASE_URL",
