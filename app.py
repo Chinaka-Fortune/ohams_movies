@@ -9,11 +9,16 @@ from models import init_db
 from flask_migrate import Migrate
 import os
 
-# Load .env
+# ------------------------------------------------------------------
+# Load .env (local development only – Vercel uses its own env vars)
+# ------------------------------------------------------------------
 load_dotenv()
 
 app = Flask(__name__)
 
+# ------------------------------------------------------------------
+# CORS – whitelist your front-ends
+# ------------------------------------------------------------------
 CORS(
     app,
     resources={
@@ -23,7 +28,6 @@ CORS(
                 "https://movie-frontend-3173.onrender.com",
                 "https://ohams-movies-i2kb.vercel.app",
                 "https://*.vercel.app",
-                # "https://*.onrender.com",
                 "ohams-movies.vercel.app",
                 "https://www.ohamsmovies.com.ng",
                 "https://ohamsmovies.com.ng",
@@ -35,11 +39,17 @@ CORS(
     },
 )
 
+# ------------------------------------------------------------------
+# Core config (still safe – these are only read, never raise)
+# ------------------------------------------------------------------
 app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
 app.config["SENDGRID_CLIENT"] = SendGridAPIClient(os.getenv("SENDGRID_API_KEY"))
 
+# ------------------------------------------------------------------
+# Helper functions
+# ------------------------------------------------------------------
 def get_twilio_client():
     sid = os.getenv("TWILIO_ACCOUNT_SID")
     token = os.getenv("TWILIO_AUTH_TOKEN")
@@ -47,14 +57,14 @@ def get_twilio_client():
         raise ValueError("Twilio credentials missing")
     return Client(sid, token)
 
-# Add helper
+
 def get_config(key, default=None):
     return os.getenv(key, default)
 
-# Use in routes:
-from_email = get_config("FROM_EMAIL", "no-reply@ohamsmovies.com.ng")
-whatsapp_from = get_config("TWILIO_WHATSAPP_FROM")
 
+# ------------------------------------------------------------------
+# *** REQUIRED ENVIRONMENT VARIABLES – CHECKED FIRST ***
+# ------------------------------------------------------------------
 required_env_vars = [
     "DATABASE_URL",
     "JWT_SECRET_KEY",
@@ -69,9 +79,19 @@ for var in required_env_vars:
     if not os.getenv(var):
         raise EnvironmentError(f"Missing required environment variable: {var}")
 
+# ------------------------------------------------------------------
+# *** NOW SAFE TO CREATE GLOBAL CONSTANTS ***
+# ------------------------------------------------------------------
+FROM_EMAIL = get_config("FROM_EMAIL", "no-reply@ohamsmovies.com.ng")
+TWILIO_WHATSAPP_FROM = get_config("TWILIO_WHATSAPP_FROM")   # guaranteed to exist
+
+# ------------------------------------------------------------------
+# Health & root endpoints
+# ------------------------------------------------------------------
 @app.route("/health")
 def health():
     return jsonify({"status": "healthy", "service": "movie-backend"}), 200
+
 
 @app.route("/")
 def index():
@@ -86,6 +106,10 @@ def index():
         200,
     )
 
+
+# ------------------------------------------------------------------
+# Debug logging (optional)
+# ------------------------------------------------------------------
 @app.before_request
 def log_request():
     headers = {
@@ -96,6 +120,9 @@ def log_request():
     print(f"DEBUG: Headers: {headers}")
 
 
+# ------------------------------------------------------------------
+# DB, JWT, Migrations
+# ------------------------------------------------------------------
 db.init_app(app)
 jwt = JWTManager(app)
 migrate = Migrate(app, db)
@@ -109,6 +136,10 @@ def init_app(app):
 
 init_app(app)
 
+
+# ------------------------------------------------------------------
+# JWT error handlers
+# ------------------------------------------------------------------
 @jwt.invalid_token_loader
 def invalid_token_callback(error):
     print(f"DEBUG: JWT invalid token error: {error}")
@@ -127,11 +158,18 @@ def expired_token_callback(jwt_header, jwt_payload):
     return jsonify({"message": "Token expired", "error": "Token has expired"}), 401
 
 
+# ------------------------------------------------------------------
+# Register API blueprint
+# ------------------------------------------------------------------
 from routes import api_blueprint
 
 app.register_blueprint(api_blueprint, url_prefix="/api")
 print("DEBUG: Registered api_blueprint with /api prefix")
 
+
+# ------------------------------------------------------------------
+# CORS headers – double-safety for Vercel cold-starts
+# ------------------------------------------------------------------
 @app.after_request
 def after_request(response):
     origin = request.headers.get("Origin")
@@ -147,15 +185,22 @@ def after_request(response):
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
         response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,DELETE,OPTIONS"
-        
     return response
 
+
+# ------------------------------------------------------------------
+# Vercel serverless handler (required)
+# ------------------------------------------------------------------
 def handler(event, context):
     from werkzeug.middleware.proxy_fix import ProxyFix
+
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
     return app(event, context)
 
 
+# ------------------------------------------------------------------
+# Local development entry point
+# ------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(debug=False, host="0.0.0.0", port=port)
