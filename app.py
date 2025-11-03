@@ -189,13 +189,17 @@ def after_request(response):
 
 
 # ------------------------------------------------------------------
-# Vercel serverless handler (required)
+# Vercel serverless handler (OFFICIAL WORKING VERSION)
 # ------------------------------------------------------------------
-def handler(event, context):
-    from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.middleware.proxy_fix import ProxyFix
 
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
-    return app(event, context)
+# Apply ProxyFix once at startup
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
+
+# Vercel handler — DO NOT call app(event, context)
+def handler(event, context):
+    from wsgi import application
+    return application(event, context)
 
 
 # ------------------------------------------------------------------
